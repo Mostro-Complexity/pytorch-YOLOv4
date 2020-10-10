@@ -16,9 +16,9 @@ from tqdm import tqdm
 import os
 
 """hyper parameters"""
-json_file_path = 'E:/Dataset/mscoco2017/annotations/instances_train2017.json'
-images_dir_path = 'mscoco2017/train2017/'
-output_path = '../data/val.txt'
+json_file_path = 'data/coco/annotations/trainval.json'
+images_dir_path = 'data/coco/train'
+output_path = 'data/general/train.txt'
 
 """load json file"""
 name_box_id = defaultdict(list)
@@ -28,31 +28,13 @@ with open(json_file_path, encoding='utf-8') as f:
 
 """generate labels"""
 images = data['images']
+image_names = {i['id']: i['file_name'] for i in images}
 annotations = data['annotations']
 for ant in tqdm(annotations):
     id = ant['image_id']
     # name = os.path.join(images_dir_path, images[id]['file_name'])
-    name = os.path.join(images_dir_path, '{:012d}.jpg'.format(id))
-    cat = ant['category_id']
-
-    if cat >= 1 and cat <= 11:
-        cat = cat - 1
-    elif cat >= 13 and cat <= 25:
-        cat = cat - 2
-    elif cat >= 27 and cat <= 28:
-        cat = cat - 3
-    elif cat >= 31 and cat <= 44:
-        cat = cat - 5
-    elif cat >= 46 and cat <= 65:
-        cat = cat - 6
-    elif cat == 67:
-        cat = cat - 7
-    elif cat == 70:
-        cat = cat - 9
-    elif cat >= 72 and cat <= 82:
-        cat = cat - 10
-    elif cat >= 84 and cat <= 90:
-        cat = cat - 11
+    name = image_names[id]
+    cat = ant['category_id'] - 1
 
     name_box_id[name].append([ant['bbox'], cat])
 
