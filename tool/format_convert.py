@@ -1,11 +1,24 @@
 # import package
 import labelme2coco
+import labelme2yolo
+import argparse
 
-# set directory that contains labelme annotations and image files
-labelme_folder = "data/labelme"
 
-# set path for coco json to be saved
-save_json_path = "data/coco/annotations/trainval.json"
+def main():
+    parser = argparse.ArgumentParser(description='Annotation Convertor')
+    parser.add_argument('-t', '--desired_type', type=str, choices=['coco', 'yolo'])
+    parser.add_argument('-i', '--input_dir', type=str, default='data/labelme')
+    parser.add_argument('-o', '--output_path', type=str, required=True)
+    args = parser.parse_args()
 
-# convert labelme annotations to coco
-labelme2coco.convert(labelme_folder, save_json_path)
+    if args.desired_type == 'coco':
+        # convert labelme annotations to coco
+        labelme2coco.convert(args.input_dir, args.output_path)
+    elif args.desired_type == 'yolo':
+        labelme2yolo.convert(args.input_dir, args.output_path)
+    else:
+        raise NotImplementedError()
+
+
+if __name__ == "__main__":
+    main()
