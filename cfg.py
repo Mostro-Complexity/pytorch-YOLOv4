@@ -18,7 +18,7 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 Cfg = EasyDict()
 
-Cfg.use_darknet_cfg = True
+Cfg.use_darknet_cfg = False
 Cfg.cfgfile = os.path.join(_BASE_DIR, 'cfg', 'yolov4.cfg')
 
 Cfg.batch = 32
@@ -41,7 +41,7 @@ Cfg.policy = Cfg.steps
 Cfg.scales = .1, .1
 
 Cfg.cutmix = 0
-Cfg.mosaic = 1
+Cfg.mosaic = 0
 
 Cfg.letter_box = 0
 Cfg.jitter = 0.2
@@ -69,6 +69,8 @@ elif Cfg.cutmix:
     Cfg.mixup = 2
 elif Cfg.mosaic:
     Cfg.mixup = 3
+else:
+    Cfg.mixup = 0
 
 Cfg.checkpoints = os.path.join(_BASE_DIR, 'checkpoints')
 Cfg.TRAIN_TENSORBOARD_DIR = os.path.join(_BASE_DIR, 'log')

@@ -12,7 +12,9 @@
 '''
 import time
 import logging
-import os, sys, math
+import os
+import sys
+import math
 import argparse
 from collections import deque
 import datetime
@@ -36,6 +38,90 @@ from tool.darknet2pytorch import Darknet
 from tool.tv_reference.utils import collate_fn as val_collate
 from tool.tv_reference.coco_utils import convert_to_coco_api
 from tool.tv_reference.coco_eval import CocoEvaluator
+
+
+def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
+    if bboxes_a.shape[1] != 3 or bboxes_b.shape[1] != 3:
+        raise IndexError
+
+    r_a, r_b = bboxes_a[:, None, 2], bboxes_b[:, 2]
+    center_dist = torch.norm(bboxes_a[:, None, :2] - bboxes_b[:, :2], p=2, dim=-1)  # center distance
+    intersect_dist, outersect_dist = torch.abs(r_a - r_b), torch.abs(r_a + r_b)
+
+    r_a_sqrd, r_b_sqrd, center_dist_sqrd = r_a.square(), r_b.square(), center_dist.square()
+    theta = torch.acos((r_a_sqrd - r_b_sqrd + center_dist_sqrd)/(2*r_a*r_b))  # It doesn't matter whether theta and phi are exchanged
+    phi = torch.acos((r_b_sqrd - r_a_sqrd + center_dist_sqrd)/(2*r_a*r_b))  # a=R,b=r
+    area_i = theta*r_a_sqrd + phi*r_b_sqrd-r_a_sqrd*torch.sin(2*theta)/2-r_b_sqrd*torch.sin(2*phi)/2
+
+    _index_a, _index_b = torch.where(center_dist < intersect_dist)  # In the case of inner circle
+    if _index_a.numel() != 0 and _index_b.numel() != 0:
+        area_i[_index_a, _index_b] = torch.min(r_a[_index_a].squeeze(), r_b[_index_b]).square()*3.141593
+
+    _index_a, _index_b = torch.where(outersect_dist < center_dist)  # In the case of outer circle
+    if _index_a.numel() != 0 and _index_b.numel() != 0:
+        area_i[_index_a, _index_b] = 0
+
+    # # intersection top left
+    # tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
+    # # intersection bottom right
+    # br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
+    # # convex (smallest enclosing box) top left and bottom right
+    # con_tl = torch.min(bboxes_a[:, None, :2], bboxes_b[:, :2])
+    # con_br = torch.max(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
+    # # centerpoint distance squared
+    # rho2 = ((bboxes_a[:, None, 0] + bboxes_a[:, None, 2]) - (bboxes_b[:, 0] + bboxes_b[:, 2])) ** 2 / 4 + (
+    #     (bboxes_a[:, None, 1] + bboxes_a[:, None, 3]) - (bboxes_b[:, 1] + bboxes_b[:, 3])) ** 2 / 4
+
+    # w1 = bboxes_a[:, 2] - bboxes_a[:, 0]
+    # h1 = bboxes_a[:, 3] - bboxes_a[:, 1]
+    # w2 = bboxes_b[:, 2] - bboxes_b[:, 0]
+    # h2 = bboxes_b[:, 3] - bboxes_b[:, 1]
+
+    # area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
+    # area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
+    # else:
+    #     # intersection top left
+    #     tl = torch.max((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
+    #                    (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
+    #     # intersection bottom right
+    #     br = torch.min((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
+    #                    (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
+
+    #     # convex (smallest enclosing box) top left and bottom right
+    #     con_tl = torch.min((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
+    #                        (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
+    #     con_br = torch.max((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
+    #                        (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
+    #     # centerpoint distance squared
+    #     rho2 = ((bboxes_a[:, None, :2] - bboxes_b[:, :2]) ** 2 / 4).sum(dim=-1)
+
+    #     w1 = bboxes_a[:, 2]
+    #     h1 = bboxes_a[:, 3]
+    #     w2 = bboxes_b[:, 2]
+    #     h2 = bboxes_b[:, 3]
+
+    #     area_a = torch.prod(bboxes_a[:, 2:], 1)
+    #     area_b = torch.prod(bboxes_b[:, 2:], 1)
+    # en = (tl < br).type(tl.type()).prod(dim=2)
+    # area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
+    area_u = 3.141593*(r_a_sqrd+ r_b_sqrd) - area_i
+    iou = area_i / area_u
+
+    # if GIoU or DIoU or CIoU:
+    #     if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
+    #         area_c = torch.prod(con_br - con_tl, 2)  # convex area
+    #         return iou - (area_c - area_u) / area_c  # GIoU
+    #     if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+    #         # convex diagonal squared
+    #         c2 = torch.pow(con_br - con_tl, 2).sum(dim=2) + 1e-16
+    #         if DIoU:
+    #             return iou - rho2 / c2  # DIoU
+    #         elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+    #             v = (4 / math.pi ** 2) * torch.pow(torch.atan(w1 / h1).unsqueeze(1) - torch.atan(w2 / h2), 2)
+    #             with torch.no_grad():
+    #                 alpha = v / (1 - iou + v)
+    #             return iou - (rho2 / c2 + v * alpha)  # CIoU
+    return iou
 
 
 def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False):
@@ -73,7 +159,7 @@ def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False
         con_br = torch.max(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
         # centerpoint distance squared
         rho2 = ((bboxes_a[:, None, 0] + bboxes_a[:, None, 2]) - (bboxes_b[:, 0] + bboxes_b[:, 2])) ** 2 / 4 + (
-                (bboxes_a[:, None, 1] + bboxes_a[:, None, 3]) - (bboxes_b[:, 1] + bboxes_b[:, 3])) ** 2 / 4
+            (bboxes_a[:, None, 1] + bboxes_a[:, None, 3]) - (bboxes_b[:, 1] + bboxes_b[:, 3])) ** 2 / 4
 
         w1 = bboxes_a[:, 2] - bboxes_a[:, 0]
         h1 = bboxes_a[:, 3] - bboxes_a[:, 1]
@@ -136,48 +222,43 @@ class Yolo_loss(nn.Module):
         self.n_classes = n_classes
         self.n_anchors = n_anchors
 
-        self.anchors = [[12, 16], [19, 36], [40, 28], [36, 75], [76, 55], [72, 146], [142, 110], [192, 243], [459, 401]]
+        self.anchors = [160, 250, 325, 400, 490, 575, 765, 842, 900]
         self.anch_masks = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
         self.ignore_thre = 0.5
 
-        self.masked_anchors, self.ref_anchors, self.grid_x, self.grid_y, self.anchor_w, self.anchor_h = [], [], [], [], [], []
+        self.masked_anchors, self.ref_anchors, self.grid_x, self.grid_y, self.anchor_r = [], [], [], [], []
 
         for i in range(3):
-            all_anchors_grid = [(w / self.strides[i], h / self.strides[i]) for w, h in self.anchors]
+            all_anchors_grid = [r / self.strides[i] for r in self.anchors]
             masked_anchors = np.array([all_anchors_grid[j] for j in self.anch_masks[i]], dtype=np.float32)
-            ref_anchors = np.zeros((len(all_anchors_grid), 4), dtype=np.float32)
-            ref_anchors[:, 2:] = np.array(all_anchors_grid, dtype=np.float32)
+            ref_anchors = np.zeros((len(all_anchors_grid), 3), dtype=np.float32)
+            ref_anchors[:, 2] = np.array(all_anchors_grid, dtype=np.float32)
             ref_anchors = torch.from_numpy(ref_anchors)
-            # calculate pred - xywh obj cls
+            # calculate pred - xyr obj cls
             fsize = image_size // self.strides[i]
             grid_x = torch.arange(fsize, dtype=torch.float).repeat(batch, 3, fsize, 1).to(device)
             grid_y = torch.arange(fsize, dtype=torch.float).repeat(batch, 3, fsize, 1).permute(0, 1, 3, 2).to(device)
-            anchor_w = torch.from_numpy(masked_anchors[:, 0]).repeat(batch, fsize, fsize, 1).permute(0, 3, 1, 2).to(
-                device)
-            anchor_h = torch.from_numpy(masked_anchors[:, 1]).repeat(batch, fsize, fsize, 1).permute(0, 3, 1, 2).to(
-                device)
+            anchor_r = torch.from_numpy(masked_anchors).repeat(batch, fsize, fsize, 1).permute(0, 3, 1, 2).to(device)
 
             self.masked_anchors.append(masked_anchors)
             self.ref_anchors.append(ref_anchors)
             self.grid_x.append(grid_x)
             self.grid_y.append(grid_y)
-            self.anchor_w.append(anchor_w)
-            self.anchor_h.append(anchor_h)
+            self.anchor_r.append(anchor_r)
 
     def build_target(self, pred, labels, batchsize, fsize, n_ch, output_id):
         # target assignment
-        tgt_mask = torch.zeros(batchsize, self.n_anchors, fsize, fsize, 4 + self.n_classes).to(device=self.device)
+        tgt_mask = torch.zeros(batchsize, self.n_anchors, fsize, fsize, 3 + self.n_classes).to(device=self.device)
         obj_mask = torch.ones(batchsize, self.n_anchors, fsize, fsize).to(device=self.device)
-        tgt_scale = torch.zeros(batchsize, self.n_anchors, fsize, fsize, 2).to(self.device)
+        tgt_scale = torch.zeros(batchsize, self.n_anchors, fsize, fsize).to(self.device)
         target = torch.zeros(batchsize, self.n_anchors, fsize, fsize, n_ch).to(self.device)
 
         # labels = labels.cpu().data
         nlabel = (labels.sum(dim=2) > 0).sum(dim=1)  # number of objects
 
-        truth_x_all = (labels[:, :, 2] + labels[:, :, 0]) / (self.strides[output_id] * 2)
-        truth_y_all = (labels[:, :, 3] + labels[:, :, 1]) / (self.strides[output_id] * 2)
-        truth_w_all = (labels[:, :, 2] - labels[:, :, 0]) / self.strides[output_id]
-        truth_h_all = (labels[:, :, 3] - labels[:, :, 1]) / self.strides[output_id]
+        truth_x_all = labels[:, :, 0] / self.strides[output_id]  # center=(p1+p2)/2 for bbox
+        truth_y_all = labels[:, :, 1] / self.strides[output_id]  # center=center for cbbox
+        truth_r_all = labels[:, :, 2] / self.strides[output_id]  # w,h=(p1-p2)  r=r
         truth_i_all = truth_x_all.to(torch.int16).cpu().numpy()
         truth_j_all = truth_y_all.to(torch.int16).cpu().numpy()
 
@@ -185,16 +266,13 @@ class Yolo_loss(nn.Module):
             n = int(nlabel[b])
             if n == 0:
                 continue
-            truth_box = torch.zeros(n, 4).to(self.device)
-            truth_box[:n, 2] = truth_w_all[b, :n]
-            truth_box[:n, 3] = truth_h_all[b, :n]
+            truth_box = torch.zeros(n, 3).to(self.device)
+            truth_box[:n, 2] = truth_r_all[b, :n]
             truth_i = truth_i_all[b, :n]
             truth_j = truth_j_all[b, :n]
 
             # calculate iou between truth and reference anchors
-            anchor_ious_all = bboxes_iou(truth_box.cpu(), self.ref_anchors[output_id], CIoU=True)
-
-            # temp = bbox_iou(truth_box.cpu(), self.ref_anchors[output_id])
+            anchor_ious_all = cbboxes_iou(truth_box.cpu(), self.ref_anchors[output_id], CIoU=True)
 
             best_n_all = anchor_ious_all.argmax(dim=1)
             best_n = best_n_all % 3
@@ -208,7 +286,7 @@ class Yolo_loss(nn.Module):
             truth_box[:n, 0] = truth_x_all[b, :n]
             truth_box[:n, 1] = truth_y_all[b, :n]
 
-            pred_ious = bboxes_iou(pred[b].view(-1, 4), truth_box, xyxy=False)
+            pred_ious = cbboxes_iou(pred[b].view(-1, 3), truth_box)
             pred_best_iou, _ = pred_ious.max(dim=1)
             pred_best_iou = (pred_best_iou > self.ignore_thre)
             pred_best_iou = pred_best_iou.view(pred[b].shape[:3])
@@ -223,55 +301,53 @@ class Yolo_loss(nn.Module):
                     tgt_mask[b, a, j, i, :] = 1
                     target[b, a, j, i, 0] = truth_x_all[b, ti] - truth_x_all[b, ti].to(torch.int16).to(torch.float)
                     target[b, a, j, i, 1] = truth_y_all[b, ti] - truth_y_all[b, ti].to(torch.int16).to(torch.float)
-                    target[b, a, j, i, 2] = torch.log(
-                        truth_w_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti], 0] + 1e-16)
-                    target[b, a, j, i, 3] = torch.log(
-                        truth_h_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti], 1] + 1e-16)
-                    target[b, a, j, i, 4] = 1
-                    target[b, a, j, i, 5 + labels[b, ti, 4].to(torch.int16).cpu().numpy()] = 1
-                    tgt_scale[b, a, j, i, :] = torch.sqrt(2 - truth_w_all[b, ti] * truth_h_all[b, ti] / fsize / fsize)
+                    target[b, a, j, i, 2] = torch.log(truth_r_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti]] + 1e-16)
+                    target[b, a, j, i, 3] = 1
+                    target[b, a, j, i, 4 + labels[b, ti, 3].to(torch.int16).cpu().numpy()] = 1
+                    tgt_scale[b, a, j, i] = torch.sqrt(2 - truth_r_all[b, ti] / fsize )# TODO:?
         return obj_mask, tgt_mask, tgt_scale, target
 
     def forward(self, xin, labels=None):
-        loss, loss_xy, loss_wh, loss_obj, loss_cls, loss_l2 = 0, 0, 0, 0, 0, 0
+        loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = 0, 0, 0, 0, 0, 0
         for output_id, output in enumerate(xin):
             batchsize = output.shape[0]
             fsize = output.shape[2]
-            n_ch = 5 + self.n_classes
+            n_ch = 4 + self.n_classes
 
             output = output.view(batchsize, self.n_anchors, n_ch, fsize, fsize)
             output = output.permute(0, 1, 3, 4, 2)  # .contiguous()
 
-            # logistic activation for xy, obj, cls
-            output[..., np.r_[:2, 4:n_ch]] = torch.sigmoid(output[..., np.r_[:2, 4:n_ch]])
+            # logistic activation for xyr, obj, cls
+            output[..., np.r_[:2, 3:n_ch]] = torch.sigmoid(output[..., np.r_[:2, 3:n_ch]])
 
-            pred = output[..., :4].clone()
+            pred = output[..., :3].clone()
             pred[..., 0] += self.grid_x[output_id]
             pred[..., 1] += self.grid_y[output_id]
-            pred[..., 2] = torch.exp(pred[..., 2]) * self.anchor_w[output_id]
-            pred[..., 3] = torch.exp(pred[..., 3]) * self.anchor_h[output_id]
+            pred[..., 2] = torch.exp(pred[..., 2]) * self.anchor_r[output_id]
 
             obj_mask, tgt_mask, tgt_scale, target = self.build_target(pred, labels, batchsize, fsize, n_ch, output_id)
 
             # loss calculation
-            output[..., 4] *= obj_mask
-            output[..., np.r_[0:4, 5:n_ch]] *= tgt_mask
-            output[..., 2:4] *= tgt_scale
+            output[..., 3] *= obj_mask
+            output[..., np.r_[:3, 4:n_ch]] *= tgt_mask
+            output[..., 2] *= tgt_scale
 
-            target[..., 4] *= obj_mask
-            target[..., np.r_[0:4, 5:n_ch]] *= tgt_mask
-            target[..., 2:4] *= tgt_scale
+            target[..., 3] *= obj_mask
+            target[..., np.r_[:3, 4:n_ch]] *= tgt_mask
+            target[..., 2] *= tgt_scale
 
-            loss_xy += F.binary_cross_entropy(input=output[..., :2], target=target[..., :2],
-                                              weight=tgt_scale * tgt_scale, reduction='sum')
-            loss_wh += F.mse_loss(input=output[..., 2:4], target=target[..., 2:4], reduction='sum') / 2
-            loss_obj += F.binary_cross_entropy(input=output[..., 4], target=target[..., 4], reduction='sum')
-            loss_cls += F.binary_cross_entropy(input=output[..., 5:], target=target[..., 5:], reduction='sum')
+            loss_xy += F.binary_cross_entropy(
+                input=output[..., :2], target=target[..., :2], reduction='sum'
+                )
+            #weight=tgt_scale.square().unsqueeze(-1).repeat(1,1,1,1,2)
+            loss_r += F.mse_loss(input=output[..., 2], target=target[..., 2], reduction='sum') / 2
+            loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum')*0.001
+            loss_cls += F.binary_cross_entropy(input=output[..., 4:], target=target[..., 4:], reduction='sum')
             loss_l2 += F.mse_loss(input=output, target=target, reduction='sum')
 
-        loss = loss_xy + loss_wh + loss_obj + loss_cls
+        loss = loss_xy + loss_r + loss_obj + loss_cls
 
-        return loss, loss_xy, loss_wh, loss_obj, loss_cls, loss_l2
+        return loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2
 
 
 def collate(batch):
@@ -296,9 +372,9 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
     n_val = len(val_dataset)
 
     train_loader = DataLoader(train_dataset, batch_size=config.batch // config.subdivisions, shuffle=True,
-                              num_workers=0, pin_memory=True, drop_last=True, collate_fn=collate)
+                              num_workers=8, pin_memory=True, drop_last=True, collate_fn=collate)
 
-    val_loader = DataLoader(val_dataset, batch_size=config.batch // config.subdivisions, shuffle=True, num_workers=0,
+    val_loader = DataLoader(val_dataset, batch_size=config.batch // config.subdivisions, shuffle=True, num_workers=8,
                             pin_memory=True, drop_last=True, collate_fn=val_collate)
 
     writer = SummaryWriter(log_dir=config.TRAIN_TENSORBOARD_DIR,
@@ -366,7 +442,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
         epoch_loss = 0
         epoch_step = 0
 
-        with tqdm(total=n_train, desc=f'Epoch {epoch + 1}/{epochs}', unit='img', ncols=50) as pbar:
+        with tqdm(total=n_train, unit='img') as pbar:
             for i, batch in enumerate(train_loader):
                 global_step += 1
                 epoch_step += 1
@@ -382,7 +458,14 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                 loss.backward()
 
                 epoch_loss += loss.item()
-
+                pbar.set_description(
+                    'Epoch:{:d}/{:d} | loss (batch):{:.4f} | loss_xy:{:.4f} | loss_wh:{:.4f} '
+                    '| loss_obj:{:.4f} | loss_cls:{:.4f} | loss_l2:{:.4f}'.format(
+                        epoch + 1,epochs,loss.item(),loss_xy.item(),loss_wh.item(),
+                        loss_obj.item(),loss_cls.item(),loss_l2.item()
+                    )
+                )
+                                    
                 if global_step % config.subdivisions == 0:
                     optimizer.step()
                     scheduler.step()
@@ -469,7 +552,7 @@ def evaluate(model, data_loader, cfg, device, logger=None, **kwargs):
     # header = 'Test:'
 
     coco = convert_to_coco_api(data_loader.dataset, bbox_fmt='coco')
-    coco_evaluator = CocoEvaluator(coco, iou_types = ["bbox"], bbox_fmt='coco')
+    coco_evaluator = CocoEvaluator(coco, iou_types=["bbox"], bbox_fmt='coco')
 
     for images, targets in data_loader:
         model_input = [[cv2.resize(img, (cfg.w, cfg.h))] for img in images]
@@ -494,11 +577,11 @@ def evaluate(model, data_loader, cfg, device, logger=None, **kwargs):
             img_height, img_width = img.shape[:2]
             # boxes = output[...,:4].copy()  # output boxes in yolo format
             boxes = boxes.squeeze(2).cpu().detach().numpy()
-            boxes[...,2:] = boxes[...,2:] - boxes[...,:2] # Transform [x1, y1, x2, y2] to [x1, y1, w, h]
-            boxes[...,0] = boxes[...,0]*img_width
-            boxes[...,1] = boxes[...,1]*img_height
-            boxes[...,2] = boxes[...,2]*img_width
-            boxes[...,3] = boxes[...,3]*img_height
+            boxes[..., 2:] = boxes[..., 2:] - boxes[..., :2]  # Transform [x1, y1, x2, y2] to [x1, y1, w, h]
+            boxes[..., 0] = boxes[..., 0]*img_width
+            boxes[..., 1] = boxes[..., 1]*img_height
+            boxes[..., 2] = boxes[..., 2]*img_width
+            boxes[..., 3] = boxes[..., 3]*img_height
             boxes = torch.as_tensor(boxes, dtype=torch.float32)
             # confs = output[...,4:].copy()
             confs = confs.cpu().detach().numpy()

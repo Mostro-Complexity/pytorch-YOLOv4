@@ -161,23 +161,23 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
     # W = output.size(3)
 
     bxy_list = []
-    bwh_list = []
+    br_list = []
     det_confs_list = []
     cls_confs_list = []
 
     for i in range(num_anchors):
-        begin = i * (5 + num_classes)
-        end = (i + 1) * (5 + num_classes)
+        begin = i * (4 + num_classes)
+        end = (i + 1) * (4 + num_classes)
         
         bxy_list.append(output[:, begin : begin + 2])
-        bwh_list.append(output[:, begin + 2 : begin + 4])
-        det_confs_list.append(output[:, begin + 4 : begin + 5])
-        cls_confs_list.append(output[:, begin + 5 : end])
+        br_list.append(output[:, begin + 2:begin + 3])
+        det_confs_list.append(output[:, begin + 3 : begin + 4])
+        cls_confs_list.append(output[:, begin + 4 : end])
 
     # Shape: [batch, num_anchors * 2, H, W]
     bxy = torch.cat(bxy_list, dim=1)
     # Shape: [batch, num_anchors * 2, H, W]
-    bwh = torch.cat(bwh_list, dim=1)
+    _br = torch.cat(br_list, dim=1)
 
     # Shape: [batch, num_anchors, H, W]
     det_confs = torch.cat(det_confs_list, dim=1)
@@ -194,7 +194,7 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
     # Apply sigmoid(), exp() and softmax() to slices
     #
     bxy = torch.sigmoid(bxy) * scale_x_y - 0.5 * (scale_x_y - 1)
-    bwh = torch.exp(bwh)
+    _br = torch.exp(_br)
     det_confs = torch.sigmoid(det_confs)
     cls_confs = torch.sigmoid(cls_confs)
 
@@ -204,11 +204,9 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
     # grid_x = torch.linspace(0, W - 1, W).reshape(1, 1, 1, W).repeat(1, 1, H, 1)
     # grid_y = torch.linspace(0, H - 1, H).reshape(1, 1, H, 1).repeat(1, 1, 1, W)
 
-    anchor_w = []
-    anchor_h = []
+    anchor_r = []
     for i in range(num_anchors):
-        anchor_w.append(anchors[i * 2])
-        anchor_h.append(anchors[i * 2 + 1])
+        anchor_r.append(anchors[i])
 
     device = None
     cuda_check = output.is_cuda
@@ -217,8 +215,7 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
 
     bx_list = []
     by_list = []
-    bw_list = []
-    bh_list = []
+    br_list = []
 
     # Apply C-x, C-y, P-w, P-h
     for i in range(num_anchors):
@@ -228,14 +225,11 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
         # Shape: [batch, 1, H, W]
         by = bxy[:, ii + 1 : ii + 2] + torch.tensor(grid_y, device=device, dtype=torch.float32) # grid_y.to(device=device, dtype=torch.float32)
         # Shape: [batch, 1, H, W]
-        bw = bwh[:, ii : ii + 1] * anchor_w[i]
-        # Shape: [batch, 1, H, W]
-        bh = bwh[:, ii + 1 : ii + 2] * anchor_h[i]
+        br = _br[:, i : i + 1] * anchor_r[i]
 
         bx_list.append(bx)
         by_list.append(by)
-        bw_list.append(bw)
-        bh_list.append(bh)
+        br_list.append(br)
 
 
     ########################################
@@ -247,32 +241,25 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
     # Shape: [batch, num_anchors, H, W]
     by = torch.cat(by_list, dim=1)
     # Shape: [batch, num_anchors, H, W]
-    bw = torch.cat(bw_list, dim=1)
-    # Shape: [batch, num_anchors, H, W]
-    bh = torch.cat(bh_list, dim=1)
-
-    # Shape: [batch, 2 * num_anchors, H, W]
-    bx_bw = torch.cat((bx, bw), dim=1)
-    # Shape: [batch, 2 * num_anchors, H, W]
-    by_bh = torch.cat((by, bh), dim=1)
+    br = torch.cat(br_list, dim=1)
 
     # normalize coordinates to [0, 1]
-    bx_bw /= output.size(3)
-    by_bh /= output.size(2)
+    bx /= output.size(3)
+    by /= output.size(2)
+    br /= output.size(2)
 
     # Shape: [batch, num_anchors * H * W, 1]
-    bx = bx_bw[:, :num_anchors].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    by = by_bh[:, :num_anchors].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    bw = bx_bw[:, num_anchors:].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
-    bh = by_bh[:, num_anchors:].view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    bx = bx.view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    by = by.view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
+    br = br.view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)
 
-    bx1 = bx - bw * 0.5
-    by1 = by - bh * 0.5
-    bx2 = bx1 + bw
-    by2 = by1 + bh
+    # bx1 = bx - br * 0.5
+    # by1 = by - bh * 0.5
+    # bx2 = bx1 + br
+    # by2 = by1 + bh
 
     # Shape: [batch, num_anchors * h * w, 4] -> [batch, num_anchors * h * w, 1, 4]
-    boxes = torch.cat((bx1, by1, bx2, by2), dim=2).view(output.size(0), num_anchors * output.size(2) * output.size(3), 1, 4)
+    boxes = torch.cat((bx, by, br), dim=2).view(output.size(0), num_anchors * output.size(2) * output.size(3), 1, 3)
     # boxes = boxes.repeat(1, 1, num_classes, 1)
 
     # boxes:     [batch, num_anchors * H * W, 1, 4]

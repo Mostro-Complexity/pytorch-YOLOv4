@@ -49,20 +49,16 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
         return bboxes, 10000
     np.random.shuffle(bboxes)
     bboxes[:, 0] -= dx
-    bboxes[:, 2] -= dx
     bboxes[:, 1] -= dy
-    bboxes[:, 3] -= dy
 
-    bboxes[:, 0] = np.clip(bboxes[:, 0], 0, sx)
-    bboxes[:, 2] = np.clip(bboxes[:, 2], 0, sx)
 
-    bboxes[:, 1] = np.clip(bboxes[:, 1], 0, sy)
-    bboxes[:, 3] = np.clip(bboxes[:, 3], 0, sy)
+    bboxes[:, 2] = np.clip(bboxes[:, 2], 0, sx//2)
+    bboxes[:, 2] = np.clip(bboxes[:, 2], 0, sy//2)
 
-    out_box = list(np.where(((bboxes[:, 1] == sy) & (bboxes[:, 3] == sy)) |
-                            ((bboxes[:, 0] == sx) & (bboxes[:, 2] == sx)) |
-                            ((bboxes[:, 1] == 0) & (bboxes[:, 3] == 0)) |
-                            ((bboxes[:, 0] == 0) & (bboxes[:, 2] == 0)))[0])
+    out_box = list(np.where(((bboxes[:, 1] - bboxes[:, 2] == sy) & (bboxes[:, 1] + bboxes[:, 2] == sy)) |
+                            ((bboxes[:, 0] - bboxes[:, 2] == sx) & (bboxes[:, 2] + bboxes[:, 2] == sx)) |
+                            ((bboxes[:, 1] - bboxes[:, 2] == 0) & (bboxes[:, 1] + bboxes[:, 2] == 0)) |
+                            ((bboxes[:, 0] - bboxes[:, 2] == 0) & (bboxes[:, 2] + bboxes[:, 2] == 0)))[0])
     list_box = list(range(bboxes.shape[0]))
     for i in out_box:
         list_box.remove(i)
@@ -71,23 +67,26 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
     if bboxes.shape[0] == 0:
         return bboxes, 10000
 
-    bboxes = bboxes[np.where((bboxes[:, 4] < classes) & (bboxes[:, 4] >= 0))[0]]
+    bboxes = bboxes[np.where((bboxes[:, 3] < classes) & (bboxes[:, 3] >= 0))[0]]
 
     if bboxes.shape[0] > num_boxes:
         bboxes = bboxes[:num_boxes]
 
-    min_w_h = np.array([bboxes[:, 2] - bboxes[:, 0], bboxes[:, 3] - bboxes[:, 1]]).min()
+    min_w_h = 2*bboxes[:, 2]
 
     bboxes[:, 0] *= (net_w / sx)
-    bboxes[:, 2] *= (net_w / sx)
+    bboxes[:, 2] *= min(net_w / sx, net_h / sy)
     bboxes[:, 1] *= (net_h / sy)
-    bboxes[:, 3] *= (net_h / sy)
 
     if flip:
         temp = net_w - bboxes[:, 0]
         bboxes[:, 0] = net_w - bboxes[:, 2]
         bboxes[:, 2] = temp
-
+        
+    bboxes[:, 0] = np.clip(bboxes[:, 0], 0, net_w - 1e-8)
+    bboxes[:, 1] = np.clip(bboxes[:, 1], 0, net_h - 1e-8)
+    _select=(bboxes[:,:2]>=608)
+    assert not _select.any(), "Illegal coordinates"
     return bboxes, min_w_h
 
 
@@ -164,7 +163,7 @@ def image_data_augmentation(mat, w, h, pleft, ptop, swidth, sheight, flip, dhue,
                     roi(left, top, width, height)
                     roi = roi & img_rect
                     dst[roi[0]:roi[0] + roi[2], roi[1]:roi[1] + roi[3]] = sized[roi[0]:roi[0] + roi[2],
-                                                                          roi[1]:roi[1] + roi[3]]
+                                                                                roi[1]:roi[1] + roi[3]]
 
             sized = dst
 
@@ -348,7 +347,7 @@ class Yolo_dataset(Dataset):
 
             truth, min_w_h = fill_truth_detection(bboxes, self.cfg.boxes, self.cfg.classes, flip, pleft, ptop, swidth,
                                                   sheight, self.cfg.w, self.cfg.h)
-            if (min_w_h / 8) < blur and blur > 1:  # disable blur if one of the objects is too small
+            if ((min_w_h / 8) < blur).any() and blur > 1:  # disable blur if one of the objects is too small
                 blur = min_w_h / 8
 
             ai = image_data_augmentation(img, self.cfg.w, self.cfg.h, pleft, ptop, swidth, sheight, flip,
@@ -382,7 +381,7 @@ class Yolo_dataset(Dataset):
                 # print(img_path)
         if use_mixup == 3:
             out_bboxes = np.concatenate(out_bboxes, axis=0)
-        out_bboxes1 = np.zeros([self.cfg.boxes, 5])
+        out_bboxes1 = np.zeros([self.cfg.boxes, 4])
         out_bboxes1[:min(out_bboxes.shape[0], self.cfg.boxes)] = out_bboxes[:min(out_bboxes.shape[0], self.cfg.boxes)]
         return out_img, out_bboxes1
 
@@ -399,17 +398,17 @@ class Yolo_dataset(Dataset):
         num_objs = len(bboxes_with_cls_id)
         target = {}
         # boxes to coco format
-        boxes = bboxes_with_cls_id[...,:4]
+        boxes = bboxes_with_cls_id[..., :4]
         boxes[..., 2:] = boxes[..., 2:] - boxes[..., :2]  # box width, box height
         target['boxes'] = torch.as_tensor(boxes, dtype=torch.float32)
-        target['labels'] = torch.as_tensor(bboxes_with_cls_id[...,-1].flatten(), dtype=torch.int64)
+        target['labels'] = torch.as_tensor(bboxes_with_cls_id[..., -1].flatten(), dtype=torch.int64)
         target['image_id'] = torch.tensor(index)
-        target['area'] = (target['boxes'][:,3])*(target['boxes'][:,2])
+        target['area'] = (target['boxes'][:, 3])*(target['boxes'][:, 2])
         target['iscrowd'] = torch.zeros((num_objs,), dtype=torch.int64)
         return img, target
 
 
-def get_image_id(filename:str) -> int:
+def get_image_id(filename: str) -> int:
     """
     Convert a string to a integer.
     Make sure that the images and the `image_id`s are in one-one correspondence.
