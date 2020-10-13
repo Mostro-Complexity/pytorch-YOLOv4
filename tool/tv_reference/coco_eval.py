@@ -275,10 +275,11 @@ def loadRes(self, resFile):
         for id, ann in enumerate(anns):
             ann['bbox'] = ann['bbox'][0]
             bb = ann['bbox']
-            x1, x2, y1, y2 = [bb[0], bb[0] + bb[2], bb[1], bb[1] + bb[3]]
+            x, y, r = bb[0], bb[1], bb[2]
             if 'segmentation' not in ann:
-                ann['segmentation'] = [[x1, y1, x1, y2, x2, y2, x2, y1]]
-            ann['area'] = bb[2] * bb[3]
+                segmentation = torch.stack((r*torch.cos(torch.linspace(0,2*np.pi,12)), r*torch.sin(torch.linspace(0,2*np.pi,12))))
+                ann['segmentation'] = [segmentation.flatten().tolist()]
+            ann['area'] = np.pi * r ** 2
             ann['id'] = id + 1
             ann['iscrowd'] = 0
     elif 'segmentation' in anns[0]:
@@ -296,10 +297,10 @@ def loadRes(self, resFile):
             s = ann['keypoints']
             x = s[0::3]
             y = s[1::3]
-            x1, x2, y1, y2 = np.min(x), np.max(x), np.min(y), np.max(y)
-            ann['area'] = (x2 - x1) * (y2 - y1)
+            x, y, r = np.mean(x), np.mean(y), np.stack((x-np.mean(x), y-np.mean(y))).norm(axis=0).max()
+            ann['area'] = np.pi * r ** 2
             ann['id'] = id + 1
-            ann['bbox'] = [x1, y1, x2 - x1, y2 - y1]
+            ann['bbox'] = [x, y, r]
     # print('DONE (t={:0.2f}s)'.format(time.time()- tic))
 
     res.dataset['annotations'] = anns

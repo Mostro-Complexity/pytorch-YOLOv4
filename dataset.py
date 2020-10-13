@@ -78,14 +78,12 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
     bboxes[:, 2] *= min(net_w / sx, net_h / sy)
     bboxes[:, 1] *= (net_h / sy)
 
-    if flip:
-        temp = net_w - bboxes[:, 0]
-        bboxes[:, 0] = net_w - bboxes[:, 2]
-        bboxes[:, 2] = temp
+    if flip:#Horizontal
+        bboxes[:, 0] = net_w - bboxes[:, 0]
         
     bboxes[:, 0] = np.clip(bboxes[:, 0], 0, net_w - 1e-8)
     bboxes[:, 1] = np.clip(bboxes[:, 1], 0, net_h - 1e-8)
-    _select=(bboxes[:,:2]>=608)
+    _select=(bboxes[:,2]>608)|(bboxes[:,2]<0)
     assert not _select.any(), "Illegal coordinates"
     return bboxes, min_w_h
 

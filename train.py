@@ -104,7 +104,7 @@ def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
     #     area_b = torch.prod(bboxes_b[:, 2:], 1)
     # en = (tl < br).type(tl.type()).prod(dim=2)
     # area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-    area_u = 3.141593*(r_a_sqrd+ r_b_sqrd) - area_i
+    area_u = 3.141593*(r_a_sqrd + r_b_sqrd) - area_i
     iou = area_i / area_u
 
     # if GIoU or DIoU or CIoU:
@@ -222,7 +222,7 @@ class Yolo_loss(nn.Module):
         self.n_classes = n_classes
         self.n_anchors = n_anchors
 
-        self.anchors = [160, 250, 325, 400, 490, 575, 765, 842, 900]
+        self.anchors = [12, 19, 28, 36, 76, 146, 243, 365, 459]
         self.anch_masks = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
         self.ignore_thre = 0.5
 
@@ -299,12 +299,13 @@ class Yolo_loss(nn.Module):
                     a = best_n[ti]
                     obj_mask[b, a, j, i] = 1
                     tgt_mask[b, a, j, i, :] = 1
+                    # Deactivation for truth
                     target[b, a, j, i, 0] = truth_x_all[b, ti] - truth_x_all[b, ti].to(torch.int16).to(torch.float)
                     target[b, a, j, i, 1] = truth_y_all[b, ti] - truth_y_all[b, ti].to(torch.int16).to(torch.float)
                     target[b, a, j, i, 2] = torch.log(truth_r_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti]] + 1e-16)
                     target[b, a, j, i, 3] = 1
                     target[b, a, j, i, 4 + labels[b, ti, 3].to(torch.int16).cpu().numpy()] = 1
-                    tgt_scale[b, a, j, i] = torch.sqrt(2 - truth_r_all[b, ti] / fsize )# TODO:?
+                    tgt_scale[b, a, j, i] = torch.sqrt(2 - torch.square(truth_r_all[b, ti] / fsize)) 
         return obj_mask, tgt_mask, tgt_scale, target
 
     def forward(self, xin, labels=None):
@@ -337,16 +338,18 @@ class Yolo_loss(nn.Module):
             target[..., 2] *= tgt_scale
 
             loss_xy += F.binary_cross_entropy(
-                input=output[..., :2], target=target[..., :2], reduction='sum'
-                )
-            #weight=tgt_scale.square().unsqueeze(-1).repeat(1,1,1,1,2)
+                input=output[..., 0], target=target[..., 0], weight=tgt_scale.square(), reduction='sum'
+            )
+            loss_xy += F.binary_cross_entropy(
+                input=output[..., 1], target=target[..., 1], weight=tgt_scale.square(), reduction='sum'
+            )
             loss_r += F.mse_loss(input=output[..., 2], target=target[..., 2], reduction='sum') / 2
-            loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum')*0.001
+            loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum')
             loss_cls += F.binary_cross_entropy(input=output[..., 4:], target=target[..., 4:], reduction='sum')
             loss_l2 += F.mse_loss(input=output, target=target, reduction='sum')
+            assert not loss_r.isnan().any(), 'nan occurs'
 
         loss = loss_xy + loss_r + loss_obj + loss_cls
-
         return loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2
 
 
@@ -453,19 +456,23 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                 bboxes = bboxes.to(device=device)
 
                 bboxes_pred = model(images)
-                loss, loss_xy, loss_wh, loss_obj, loss_cls, loss_l2 = criterion(bboxes_pred, bboxes)
+
+                for b in bboxes_pred:
+                    assert not b.isnan().any(), 'nan occurs'
+
+                loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = criterion(bboxes_pred, bboxes)
                 # loss = loss / config.subdivisions
                 loss.backward()
-
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=40, norm_type=2)
                 epoch_loss += loss.item()
                 pbar.set_description(
-                    'Epoch:{:d}/{:d} | loss (batch):{:.4f} | loss_xy:{:.4f} | loss_wh:{:.4f} '
-                    '| loss_obj:{:.4f} | loss_cls:{:.4f} | loss_l2:{:.4f}'.format(
-                        epoch + 1,epochs,loss.item(),loss_xy.item(),loss_wh.item(),
-                        loss_obj.item(),loss_cls.item(),loss_l2.item()
+                    'Epoch:{:d}/{:d} | loss (batch):{:.4f} | loss_xy:{:.4f} | loss_r:{:.4f} '
+                    '| loss_obj:{:.4f} | loss_cls:{:.4f}'.format(
+                        epoch + 1, epochs, loss.item(), loss_xy.item(), loss_r.item(),
+                        loss_obj.item(), loss_cls.item()
                     )
                 )
-                                    
+
                 if global_step % config.subdivisions == 0:
                     optimizer.step()
                     scheduler.step()
@@ -474,13 +481,13 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                 if global_step % (log_step * config.subdivisions) == 0:
                     writer.add_scalar('train/Loss', loss.item(), global_step)
                     writer.add_scalar('train/loss_xy', loss_xy.item(), global_step)
-                    writer.add_scalar('train/loss_wh', loss_wh.item(), global_step)
+                    writer.add_scalar('train/loss_r', loss_r.item(), global_step)
                     writer.add_scalar('train/loss_obj', loss_obj.item(), global_step)
                     writer.add_scalar('train/loss_cls', loss_cls.item(), global_step)
                     writer.add_scalar('train/loss_l2', loss_l2.item(), global_step)
                     writer.add_scalar('lr', scheduler.get_lr()[0] * config.batch, global_step)
                     pbar.set_postfix(**{'loss (batch)': loss.item(), 'loss_xy': loss_xy.item(),
-                                        'loss_wh': loss_wh.item(),
+                                        'loss_r': loss_r.item(),
                                         'loss_obj': loss_obj.item(),
                                         'loss_cls': loss_cls.item(),
                                         'loss_l2': loss_l2.item(),
@@ -489,7 +496,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                     logging.debug('Train step_{}: loss : {},loss xy : {},loss wh : {},'
                                   'loss obj : {}，loss cls : {},loss l2 : {},lr : {}'
                                   .format(global_step, loss.item(), loss_xy.item(),
-                                          loss_wh.item(), loss_obj.item(),
+                                          loss_r.item(), loss_obj.item(),
                                           loss_cls.item(), loss_l2.item(),
                                           scheduler.get_lr()[0] * config.batch))
 
@@ -577,13 +584,11 @@ def evaluate(model, data_loader, cfg, device, logger=None, **kwargs):
             img_height, img_width = img.shape[:2]
             # boxes = output[...,:4].copy()  # output boxes in yolo format
             boxes = boxes.squeeze(2).cpu().detach().numpy()
-            boxes[..., 2:] = boxes[..., 2:] - boxes[..., :2]  # Transform [x1, y1, x2, y2] to [x1, y1, w, h]
+            # boxes[..., 2:] = boxes[..., 2:] - boxes[..., :2]  # Transform [x1, y1, x2, y2] to [x1, y1, w, h]
             boxes[..., 0] = boxes[..., 0]*img_width
             boxes[..., 1] = boxes[..., 1]*img_height
-            boxes[..., 2] = boxes[..., 2]*img_width
-            boxes[..., 3] = boxes[..., 3]*img_height
+            boxes[..., 2] = boxes[..., 2]*min(img_width, img_height)
             boxes = torch.as_tensor(boxes, dtype=torch.float32)
-            # confs = output[...,4:].copy()
             confs = confs.cpu().detach().numpy()
             labels = np.argmax(confs, axis=1).flatten()
             labels = torch.as_tensor(labels, dtype=torch.int64)
