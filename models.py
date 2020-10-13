@@ -97,7 +97,7 @@ class ResBlock(nn.Module):
 
 class DownSample1(nn.Module):
     def __init__(self):
-        super().__init__()
+        super(DownSample1,self).__init__()
         self.conv1 = Conv_Bn_Activation(3, 32, 3, 1, 'mish')
 
         self.conv2 = Conv_Bn_Activation(32, 64, 3, 2, 'mish')
@@ -234,6 +234,167 @@ class DownSample5(nn.Module):
         x4 = torch.cat([x4, x2], dim=1)
         x5 = self.conv5(x4)
         return x5
+
+
+class CSPDarkNet53(nn.Module):
+    def __init__(self):
+        super(CSPDarkNet53, self).__init__()
+        self.down1 = DownSample1()
+        self.down2 = DownSample2()
+        self.down3 = DownSample3()
+        self.down4 = DownSample4()
+        self.down5 = DownSample5()
+
+    def forward(self, x):
+        d1 = self.down1(x)
+        d2 = self.down2(d1)
+        d3 = self.down3(d2)
+        d4 = self.down4(d3)
+        d5 = self.down5(d4)
+
+        return d5, d4, d3
+    
+    def blocks(self):
+        return self.down1,self.down2 ,self.down3,self.down4,self.down5
+
+
+def _bn_function_factory(norm, relu, conv):
+    def bn_function(*inputs):
+        concated_features = torch.cat(inputs, 1)
+        bottleneck_output = conv(relu(norm(concated_features)))
+        return bottleneck_output
+
+    return bn_function
+
+
+class _DenseLayer(nn.Module):
+    def __init__(self, num_input_features, growth_rate, bn_size, drop_rate, efficient=False):
+        super(_DenseLayer, self).__init__()
+        self.add_module('norm1', nn.BatchNorm2d(num_input_features)),
+        self.add_module('relu1', nn.ReLU(inplace=True)),
+        self.add_module('conv1', nn.Conv2d(num_input_features, bn_size * growth_rate,
+                        kernel_size=1, stride=1, bias=False)),
+        self.add_module('norm2', nn.BatchNorm2d(bn_size * growth_rate)),
+        self.add_module('relu2', nn.ReLU(inplace=True)),
+        self.add_module('conv2', nn.Conv2d(bn_size * growth_rate, growth_rate,
+                        kernel_size=3, stride=1, padding=1, bias=False)),
+        self.drop_rate = drop_rate
+        self.efficient = efficient
+
+    def forward(self, *prev_features):
+        bn_function = _bn_function_factory(self.norm1, self.relu1, self.conv1)
+        if self.efficient and any(prev_feature.requires_grad for prev_feature in prev_features):
+            bottleneck_output = cp.checkpoint(bn_function, *prev_features)
+        else:
+            bottleneck_output = bn_function(*prev_features)
+        new_features = self.conv2(self.relu2(self.norm2(bottleneck_output)))
+        if self.drop_rate > 0:
+            new_features = F.dropout(new_features, p=self.drop_rate, training=self.training)
+        return new_features
+
+
+class _Transition(nn.Sequential):
+    def __init__(self, num_input_features, num_output_features):
+        super(_Transition, self).__init__()
+        self.add_module('norm', nn.BatchNorm2d(num_input_features))
+        self.add_module('relu', nn.ReLU(inplace=True))
+        self.add_module('conv', nn.Conv2d(num_input_features, num_output_features,
+                                          kernel_size=1, stride=1, bias=False))
+        self.add_module('pool', nn.AvgPool2d(kernel_size=2, stride=2))
+
+
+class _DenseBlock(nn.Module):
+    def __init__(self, num_layers, num_input_features, bn_size, growth_rate, drop_rate, efficient=False):
+        super(_DenseBlock, self).__init__()
+        for i in range(num_layers):
+            layer = _DenseLayer(
+                num_input_features + i * growth_rate,
+                growth_rate=growth_rate,
+                bn_size=bn_size,
+                drop_rate=drop_rate,
+                efficient=efficient,
+            )
+            self.add_module('denselayer%d' % (i + 1), layer)
+
+    def forward(self, init_features):
+        features = [init_features]
+        for name, layer in self.named_children():
+            new_features = layer(*features)
+            features.append(new_features)
+        return torch.cat(features, 1)
+
+
+class DenseNet(nn.Module):
+    r"""Densenet-BC model class, based on
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`
+    Args:
+        growth_rate (int) - how many filters to add each layer (`k` in paper)
+        block_config (list of 3 or 4 ints) - how many layers in each pooling block
+        num_init_features (int) - the number of filters to learn in the first convolution layer
+        bn_size (int) - multiplicative factor for number of bottle neck layers
+            (i.e. bn_size * k features in the bottleneck layer)
+        drop_rate (float) - dropout rate after each dense layer
+        num_classes (int) - number of classification classes
+        small_inputs (bool) - set to True if images are 32x32. Otherwise assumes images are larger.
+        efficient (bool) - set to True to use checkpointing. Much more memory efficient, but slower.
+    """
+    def __init__(self, growth_rate=12, block_config=(16, 16, 16, 16), compression=0.5,
+                 num_init_features=24, bn_size=4, drop_rate=0,
+                 num_classes=10, small_inputs=True, efficient=False):
+
+        super(DenseNet, self).__init__()
+        assert 0 < compression <= 1, 'compression of densenet should be between 0 and 1'
+
+        # First convolution
+        if small_inputs:
+            self.conv0 = nn.Conv2d(3, num_init_features, kernel_size=3, stride=1, padding=1, bias=False)
+        else:
+            self.conv0 = nn.Sequential(
+                nn.Conv2d(3, num_init_features, kernel_size=7, stride=2, padding=3, bias=False),
+                nn.BatchNorm2d(num_init_features),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1,ceil_mode=False)
+            )
+
+        # Each denseblock
+        self.features=nn.ModuleList()
+        num_features = num_init_features
+        for i, num_layers in enumerate(block_config):
+            block = _DenseBlock(
+                num_layers=num_layers,
+                num_input_features=num_features,
+                bn_size=bn_size,
+                growth_rate=growth_rate,
+                drop_rate=drop_rate,
+                efficient=efficient,
+            )
+            self.features.append(block)
+            num_features = num_features + num_layers * growth_rate
+            if i != len(block_config) - 1:
+                trans = _Transition(num_input_features=num_features,
+                                    num_output_features=int(num_features * compression))
+                self.features.append( trans)
+                num_features = int(num_features * compression)
+
+        # Final batch norm
+        self.features.append( nn.BatchNorm2d(num_features))
+
+        # Initialization
+        # for name, param in self.named_parameters():
+        #     if 'conv' in name and 'weight' in name:
+        #         n = param.size(0) * param.size(2) * param.size(3)
+        #         param.data.normal_().mul_(math.sqrt(2. / n))
+
+    def forward(self, x):
+        feature = [x]
+        x=self.conv0(x)
+        feature.append(x)
+        for module in self.features:
+            x=module(x)
+            feature.append(x)
+        return feature
+
+
 
 
 class Neck(nn.Module):
@@ -407,23 +568,19 @@ class Yolov4Head(nn.Module):
 
 
 class Yolov4(nn.Module):
-    def __init__(self, yolov4conv137weight=None, n_classes=80, inference=False):
+    def __init__(self, backbone,yolov4weight=None, n_classes=80, inference=False):
         super(Yolov4, self).__init__()
 
         output_ch = (3 + 1 + n_classes) * 3
 
         # backbone
-        self.down1 = DownSample1()
-        self.down2 = DownSample2()
-        self.down3 = DownSample3()
-        self.down4 = DownSample4()
-        self.down5 = DownSample5()
+        self.backbone = backbone
         # neck
         self.neek = Neck(inference)
         # yolov4conv137
-        if yolov4conv137weight:
-            _model = nn.Sequential(self.down1, self.down2, self.down3, self.down4, self.down5, self.neek)
-            pretrained_dict = torch.load(yolov4conv137weight)
+        if yolov4weight:
+            _model = nn.Sequential(*self.backbone.blocks(), self.neek)
+            pretrained_dict = torch.load(yolov4weight)
 
             model_dict = _model.state_dict()
             # 1. filter out unnecessary keys
@@ -435,13 +592,8 @@ class Yolov4(nn.Module):
         # head
         self.head = Yolov4Head(output_ch, n_classes, inference)
 
-    def forward(self, input):
-        d1 = self.down1(input)
-        d2 = self.down2(d1)
-        d3 = self.down3(d2)
-        d4 = self.down4(d3)
-        d5 = self.down5(d4)
-
+    def forward(self, x):
+        d5, d4, d3=self.backbone(x)
         x20, x13, x6 = self.neek(d5, d4, d3)
 
         output = self.head(x20, x13, x6)
@@ -470,7 +622,7 @@ if __name__ == "__main__":
         print('Usage: ')
         print('  python models.py num_classes weightfile imgfile namefile')
 
-    model = Yolov4(yolov4conv137weight=None, n_classes=n_classes, inference=True)
+    model = Yolov4(yolov4weight=None, n_classes=n_classes, inference=True)
 
     pretrained_dict = torch.load(weightfile, map_location=torch.device('cuda'))
     model.load_state_dict(pretrained_dict)

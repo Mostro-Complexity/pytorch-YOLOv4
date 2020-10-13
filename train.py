@@ -32,7 +32,7 @@ from easydict import EasyDict as edict
 
 from dataset import Yolo_dataset
 from cfg import Cfg
-from models import Yolov4
+from models import Yolov4,CSPDarkNet53,DenseNet
 from tool.darknet2pytorch import Darknet
 
 from tool.tv_reference.utils import collate_fn as val_collate
@@ -505,7 +505,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
             if cfg.use_darknet_cfg:
                 eval_model = Darknet(cfg.cfgfile, inference=True)
             else:
-                eval_model = Yolov4(cfg.pretrained, n_classes=cfg.classes, inference=True)
+                eval_model = Yolov4(DenseNet(),yolov4weight=cfg.pretrained, n_classes=cfg.classes, inference=True)
             # eval_model = Yolov4(yolov4conv137weight=None, n_classes=config.classes, inference=True)
             if torch.cuda.device_count() > 1:
                 eval_model.load_state_dict(model.module.state_dict())
@@ -701,7 +701,7 @@ if __name__ == "__main__":
     if cfg.use_darknet_cfg:
         model = Darknet(cfg.cfgfile)
     else:
-        model = Yolov4(cfg.pretrained, n_classes=cfg.classes)
+        model = Yolov4(DenseNet(),yolov4weight=cfg.pretrained, n_classes=cfg.classes)
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
