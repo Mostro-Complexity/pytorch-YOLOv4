@@ -3,6 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 from tool.torch_utils import *
 from tool.yolo_layer import YoloLayer
+import torch.utils as utils
 
 
 class Mish(torch.nn.Module):
@@ -97,7 +98,7 @@ class ResBlock(nn.Module):
 
 class DownSample1(nn.Module):
     def __init__(self):
-        super(DownSample1,self).__init__()
+        super(DownSample1, self).__init__()
         self.conv1 = Conv_Bn_Activation(3, 32, 3, 1, 'mish')
 
         self.conv2 = Conv_Bn_Activation(32, 64, 3, 2, 'mish')
@@ -253,9 +254,9 @@ class CSPDarkNet53(nn.Module):
         d5 = self.down5(d4)
 
         return d5, d4, d3
-    
+
     def blocks(self):
-        return self.down1,self.down2 ,self.down3,self.down4,self.down5
+        return self.down1, self.down2, self.down3, self.down4, self.down5
 
 
 def _bn_function_factory(norm, relu, conv):
@@ -273,18 +274,18 @@ class _DenseLayer(nn.Module):
         self.add_module('norm1', nn.BatchNorm2d(num_input_features)),
         self.add_module('relu1', nn.ReLU(inplace=True)),
         self.add_module('conv1', nn.Conv2d(num_input_features, bn_size * growth_rate,
-                        kernel_size=1, stride=1, bias=False)),
+                                           kernel_size=1, stride=1, bias=False)),
         self.add_module('norm2', nn.BatchNorm2d(bn_size * growth_rate)),
         self.add_module('relu2', nn.ReLU(inplace=True)),
         self.add_module('conv2', nn.Conv2d(bn_size * growth_rate, growth_rate,
-                        kernel_size=3, stride=1, padding=1, bias=False)),
+                                           kernel_size=3, stride=1, padding=1, bias=False)),
         self.drop_rate = drop_rate
         self.efficient = efficient
 
     def forward(self, *prev_features):
         bn_function = _bn_function_factory(self.norm1, self.relu1, self.conv1)
         if self.efficient and any(prev_feature.requires_grad for prev_feature in prev_features):
-            bottleneck_output = cp.checkpoint(bn_function, *prev_features)
+            bottleneck_output = utils.checkpoint.checkpoint(bn_function, *prev_features)
         else:
             bottleneck_output = bn_function(*prev_features)
         new_features = self.conv2(self.relu2(self.norm2(bottleneck_output)))
@@ -334,13 +335,12 @@ class DenseNet(nn.Module):
         bn_size (int) - multiplicative factor for number of bottle neck layers
             (i.e. bn_size * k features in the bottleneck layer)
         drop_rate (float) - dropout rate after each dense layer
-        num_classes (int) - number of classification classes
         small_inputs (bool) - set to True if images are 32x32. Otherwise assumes images are larger.
         efficient (bool) - set to True to use checkpointing. Much more memory efficient, but slower.
     """
-    def __init__(self, growth_rate=12, block_config=(16, 16, 16, 16), compression=0.5,
-                 num_init_features=24, bn_size=4, drop_rate=0,
-                 num_classes=10, small_inputs=True, efficient=False):
+
+    def __init__(self, block_config=(12, 9, 24, 48), compression=0.875,
+                 num_init_features=24, bn_size=4, drop_rate=0, small_inputs=True, efficient=False):
 
         super(DenseNet, self).__init__()
         assert 0 < compression <= 1, 'compression of densenet should be between 0 and 1'
@@ -353,31 +353,106 @@ class DenseNet(nn.Module):
                 nn.Conv2d(3, num_init_features, kernel_size=7, stride=2, padding=3, bias=False),
                 nn.BatchNorm2d(num_init_features),
                 nn.ReLU(inplace=True),
-                nn.MaxPool2d(kernel_size=3, stride=2, padding=1,ceil_mode=False)
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1, ceil_mode=False)
             )
 
         # Each denseblock
-        self.features=nn.ModuleList()
-        num_features = num_init_features
-        for i, num_layers in enumerate(block_config):
-            block = _DenseBlock(
-                num_layers=num_layers,
-                num_input_features=num_features,
+        # self.features = nn.ModuleList()
+        # for i, num_layers in enumerate(block_config):
+        #     block = _DenseBlock(
+        #         num_layers=num_layers,
+        #         num_input_features=num_init_features,
+        #         bn_size=bn_size,
+        #         growth_rate=growth_rate,
+        #         drop_rate=drop_rate,
+        #         efficient=efficient,
+        #     )
+        #     self.features.append(block)
+        #     num_init_features = num_init_features + num_layers * growth_rate
+        #     if i != len(block_config) - 1:
+        #         trans = _Transition(
+        #             num_input_features=num_init_features,
+        #             num_output_features=int(num_init_features * compression)
+        #         )
+        #         self.features.append(trans)
+        #         num_init_features = int(num_init_features * compression)
+
+        self.stage0 = nn.Sequential(
+            _DenseBlock(
+                num_layers=8,
+                num_input_features=num_init_features,
                 bn_size=bn_size,
-                growth_rate=growth_rate,
+                growth_rate=8,
                 drop_rate=drop_rate,
                 efficient=efficient,
+            ),
+            _Transition(
+                num_input_features=88,
+                num_output_features=64
             )
-            self.features.append(block)
-            num_features = num_features + num_layers * growth_rate
-            if i != len(block_config) - 1:
-                trans = _Transition(num_input_features=num_features,
-                                    num_output_features=int(num_features * compression))
-                self.features.append( trans)
-                num_features = int(num_features * compression)
+        )
 
+        self.stage1 = nn.Sequential(
+            _DenseBlock(
+                num_layers=8,
+                num_input_features=64,
+                bn_size=bn_size,
+                growth_rate=16,
+                drop_rate=drop_rate,
+                efficient=efficient,
+            ),
+            _Transition(
+                num_input_features=192,
+                num_output_features=128
+            )
+        )
+
+        self.stage2 = nn.Sequential(
+            _DenseBlock(
+                num_layers=8,
+                num_input_features=128,
+                bn_size=bn_size,
+                growth_rate=32,
+                drop_rate=drop_rate,
+                efficient=efficient,
+            ),
+            _Transition(
+                num_input_features=384,
+                num_output_features=256
+            )
+        )
+
+        self.stage3 = nn.Sequential(
+            _DenseBlock(
+                num_layers=8,
+                num_input_features=256,
+                bn_size=bn_size,
+                growth_rate=64,
+                drop_rate=drop_rate,
+                efficient=efficient,
+            ),
+            _Transition(
+                num_input_features=768,
+                num_output_features=512
+            )
+        )
+
+        self.stage4 = nn.Sequential(
+            _DenseBlock(
+                num_layers=8,
+                num_input_features=512,
+                bn_size=bn_size,
+                growth_rate=128,
+                drop_rate=drop_rate,
+                efficient=efficient,
+            ),
+            _Transition(
+                num_input_features=1536,
+                num_output_features=1024
+            )
+        )
         # Final batch norm
-        self.features.append( nn.BatchNorm2d(num_features))
+        # self.features.append(nn.BatchNorm2d(num_init_features))
 
         # Initialization
         # for name, param in self.named_parameters():
@@ -386,15 +461,13 @@ class DenseNet(nn.Module):
         #         param.data.normal_().mul_(math.sqrt(2. / n))
 
     def forward(self, x):
-        feature = [x]
-        x=self.conv0(x)
-        feature.append(x)
-        for module in self.features:
-            x=module(x)
-            feature.append(x)
-        return feature
-
-
+        x0 = self.conv0(x)
+        x0 = self.stage0(x0)
+        x1 = self.stage1(x0)
+        x2 = self.stage2(x1)
+        x3 = self.stage3(x2)
+        x4 = self.stage4(x3)
+        return x4, x3, x2
 
 
 class Neck(nn.Module):
@@ -568,7 +641,7 @@ class Yolov4Head(nn.Module):
 
 
 class Yolov4(nn.Module):
-    def __init__(self, backbone,yolov4weight=None, n_classes=80, inference=False):
+    def __init__(self, backbone, yolov4weight=None, n_classes=80, inference=False):
         super(Yolov4, self).__init__()
 
         output_ch = (3 + 1 + n_classes) * 3
@@ -593,7 +666,7 @@ class Yolov4(nn.Module):
         self.head = Yolov4Head(output_ch, n_classes, inference)
 
     def forward(self, x):
-        d5, d4, d3=self.backbone(x)
+        d5, d4, d3 = self.backbone(x)
         x20, x13, x6 = self.neek(d5, d4, d3)
 
         output = self.head(x20, x13, x6)

@@ -463,7 +463,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                 loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = criterion(bboxes_pred, bboxes)
                 # loss = loss / config.subdivisions
                 loss.backward()
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=40, norm_type=2)
+                # nn.utils.clip_grad_norm_(model.parameters(), max_norm=40, norm_type=2)
                 epoch_loss += loss.item()
                 pbar.set_description(
                     'Epoch:{:d}/{:d} | loss (batch):{:.4f} | loss_xy:{:.4f} | loss_r:{:.4f} '
@@ -502,32 +502,33 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
 
                 pbar.update(images.shape[0])
 
-            if cfg.use_darknet_cfg:
-                eval_model = Darknet(cfg.cfgfile, inference=True)
-            else:
-                eval_model = Yolov4(DenseNet(),yolov4weight=cfg.pretrained, n_classes=cfg.classes, inference=True)
-            # eval_model = Yolov4(yolov4conv137weight=None, n_classes=config.classes, inference=True)
-            if torch.cuda.device_count() > 1:
-                eval_model.load_state_dict(model.module.state_dict())
-            else:
-                eval_model.load_state_dict(model.state_dict())
-            eval_model.to(device)
-            evaluator = evaluate(eval_model, val_loader, config, device)
-            del eval_model
+            if (epoch+1) % config.VALIDATE_INTERVAL==0:
+                if cfg.use_darknet_cfg:
+                    eval_model = Darknet(cfg.cfgfile, inference=True)
+                else:
+                    eval_model = Yolov4(DenseNet(efficient=True),yolov4weight=cfg.pretrained, n_classes=cfg.classes, inference=True)
+                # eval_model = Yolov4(yolov4conv137weight=None, n_classes=config.classes, inference=True)
+                if torch.cuda.device_count() > 1:
+                    eval_model.load_state_dict(model.module.state_dict())
+                else:
+                    eval_model.load_state_dict(model.state_dict())
+                eval_model.to(device)
+                evaluator = evaluate(eval_model, val_loader, config, device)
+                del eval_model
 
-            stats = evaluator.coco_eval['bbox'].stats
-            writer.add_scalar('train/AP', stats[0], global_step)
-            writer.add_scalar('train/AP50', stats[1], global_step)
-            writer.add_scalar('train/AP75', stats[2], global_step)
-            writer.add_scalar('train/AP_small', stats[3], global_step)
-            writer.add_scalar('train/AP_medium', stats[4], global_step)
-            writer.add_scalar('train/AP_large', stats[5], global_step)
-            writer.add_scalar('train/AR1', stats[6], global_step)
-            writer.add_scalar('train/AR10', stats[7], global_step)
-            writer.add_scalar('train/AR100', stats[8], global_step)
-            writer.add_scalar('train/AR_small', stats[9], global_step)
-            writer.add_scalar('train/AR_medium', stats[10], global_step)
-            writer.add_scalar('train/AR_large', stats[11], global_step)
+                stats = evaluator.coco_eval['bbox'].stats
+                writer.add_scalar('train/AP', stats[0], global_step)
+                writer.add_scalar('train/AP50', stats[1], global_step)
+                writer.add_scalar('train/AP75', stats[2], global_step)
+                writer.add_scalar('train/AP_small', stats[3], global_step)
+                writer.add_scalar('train/AP_medium', stats[4], global_step)
+                writer.add_scalar('train/AP_large', stats[5], global_step)
+                writer.add_scalar('train/AR1', stats[6], global_step)
+                writer.add_scalar('train/AR10', stats[7], global_step)
+                writer.add_scalar('train/AR100', stats[8], global_step)
+                writer.add_scalar('train/AR_small', stats[9], global_step)
+                writer.add_scalar('train/AR_medium', stats[10], global_step)
+                writer.add_scalar('train/AR_large', stats[11], global_step)
 
             if save_cp:
                 try:
@@ -701,7 +702,7 @@ if __name__ == "__main__":
     if cfg.use_darknet_cfg:
         model = Darknet(cfg.cfgfile)
     else:
-        model = Yolov4(DenseNet(),yolov4weight=cfg.pretrained, n_classes=cfg.classes)
+        model = Yolov4(DenseNet(efficient=True),yolov4weight=cfg.pretrained, n_classes=cfg.classes)
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)

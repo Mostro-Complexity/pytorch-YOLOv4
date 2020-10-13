@@ -57,6 +57,7 @@ Cfg.TRAIN_EPOCHS = 300
 Cfg.train_label = os.path.join(_BASE_DIR, 'data', 'general', 'train.txt')
 Cfg.val_label = os.path.join(_BASE_DIR, 'data', 'general', 'val.txt')
 Cfg.TRAIN_OPTIMIZER = 'adam'
+Cfg.VALIDATE_INTERVAL = 5
 '''
 image_path1 x1,y1,x2,y2,id x1,y1,x2,y2,id x1,y1,x2,y2,id ...
 image_path2 x1,y1,x2,y2,id x1,y1,x2,y2,id x1,y1,x2,y2,id ...
