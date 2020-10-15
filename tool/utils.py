@@ -3,6 +3,7 @@ import os
 import time
 import math
 import numpy as np
+import torch
 
 import itertools
 import struct  # get_image_size
@@ -20,7 +21,7 @@ def softmax(x):
 
 
 def bbox_iou(box1, box2, x1y1x2y2=True):
-    
+
     # print('iou box1:', box1)
     # print('iou box2:', box2)
 
@@ -58,14 +59,37 @@ def bbox_iou(box1, box2, x1y1x2y2=True):
     return carea / uarea
 
 
+def cbboxes_inter(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
+    if bboxes_a.shape[1] != 3 or bboxes_b.shape[1] != 3:
+        raise IndexError
+
+    r_a, r_b = bboxes_a[:, None, 2], bboxes_b[:, 2]
+    center_dist = np.linalg.norm(bboxes_a[:, None, :2] - bboxes_b[:, :2], axis=-1)  # center distance
+    intersect_dist, outersect_dist = np.abs(r_a - r_b), np.abs(r_a + r_b)
+
+    r_a_sqrd, r_b_sqrd, center_dist_sqrd = np.square(r_a), np.square(r_b), np.square(center_dist)
+    theta = np.arccos((r_a_sqrd - r_b_sqrd + center_dist_sqrd)/(2*r_a*r_b))  # It doesn't matter whether theta and phi are exchanged
+    phi = np.arccos((r_b_sqrd - r_a_sqrd + center_dist_sqrd)/(2*r_a*r_b))  # a=R,b=r
+    area_i = theta*r_a_sqrd + phi*r_b_sqrd-r_a_sqrd*np.sin(2*theta)/2-r_b_sqrd*np.sin(2*phi)/2
+
+    _index_a, _index_b = np.where(center_dist < intersect_dist)  # In the case of inner circle
+    if len(_index_a) != 0 and len(_index_b) != 0:
+        area_i[_index_a, _index_b] = np.square(np.min([r_a[_index_a].squeeze(), r_b[_index_b]]))*np.pi
+
+    _index_a, _index_b = np.where(outersect_dist < center_dist)  # In the case of outer circle
+    if len(_index_a) != 0 and len(_index_b) != 0:
+        area_i[_index_a, _index_b] = 0
+
+    return area_i
+
+
 def nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
     # print(boxes.shape)
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
+    x = boxes[:, 0]
+    y = boxes[:, 1]
+    r = boxes[:, 2]
 
-    areas = (x2 - x1) * (y2 - y1)
+    areas = np.pi*r**2
     order = confs.argsort()[::-1]
 
     keep = []
@@ -75,14 +99,7 @@ def nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
 
         keep.append(idx_self)
 
-        xx1 = np.maximum(x1[idx_self], x1[idx_other])
-        yy1 = np.maximum(y1[idx_self], y1[idx_other])
-        xx2 = np.minimum(x2[idx_self], x2[idx_other])
-        yy2 = np.minimum(y2[idx_self], y2[idx_other])
-
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
+        inter = cbboxes_inter(boxes[None, idx_self], boxes[idx_other])
 
         if min_mode:
             over = inter / np.minimum(areas[order[0]], areas[order[1:]])
@@ -91,9 +108,8 @@ def nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
 
         inds = np.where(over <= nms_thresh)[0]
         order = order[inds + 1]
-    
-    return np.array(keep)
 
+    return np.array(keep)
 
 
 def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
@@ -113,10 +129,9 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
     height = img.shape[0]
     for i in range(len(boxes)):
         box = boxes[i]
-        x1 = int(box[0] * width)
-        y1 = int(box[1] * height)
-        x2 = int(box[2] * width)
-        y2 = int(box[3] * height)
+        x = int(box[0] * width)
+        y = int(box[1] * height)
+        r = int(box[2] * min(width, height))
 
         if color:
             rgb = color
@@ -133,8 +148,8 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
             blue = get_color(0, offset, classes)
             if color is None:
                 rgb = (red, green, blue)
-            img = cv2.putText(img, class_names[cls_id], (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1.2, rgb, 1)
-        img = cv2.rectangle(img, (x1, y1), (x2, y2), rgb, 1)
+            img = cv2.putText(img, class_names[cls_id], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.2, rgb, 1)
+        img = cv2.circle(img, (x, y), r, rgb, 3)
     if savename:
         print("save plot results to %s" % savename)
         cv2.imwrite(savename, img)
@@ -162,7 +177,6 @@ def load_class_names(namesfile):
     return class_names
 
 
-
 def post_processing(img, conf_thresh, nms_thresh, output):
 
     # anchors = [12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401]
@@ -171,7 +185,7 @@ def post_processing(img, conf_thresh, nms_thresh, output):
     # strides = [8, 16, 32]
     # anchor_step = len(anchors) // num_anchors
 
-    # [batch, num, 1, 4]
+    # [batch, num, 1, 3]
     box_array = output[0]
     # [batch, num, num_classes]
     confs = output[1]
@@ -195,7 +209,7 @@ def post_processing(img, conf_thresh, nms_thresh, output):
 
     bboxes_batch = []
     for i in range(box_array.shape[0]):
-       
+
         argwhere = max_conf[i] > conf_thresh
         l_box_array = box_array[i, argwhere, :]
         l_max_conf = max_conf[i, argwhere]
@@ -211,15 +225,15 @@ def post_processing(img, conf_thresh, nms_thresh, output):
             ll_max_id = l_max_id[cls_argwhere]
 
             keep = nms_cpu(ll_box_array, ll_max_conf, nms_thresh)
-            
+
             if (keep.size > 0):
                 ll_box_array = ll_box_array[keep, :]
                 ll_max_conf = ll_max_conf[keep]
                 ll_max_id = ll_max_id[keep]
 
                 for k in range(ll_box_array.shape[0]):
-                    bboxes.append([ll_box_array[k, 0], ll_box_array[k, 1], ll_box_array[k, 2], ll_box_array[k, 3], ll_max_conf[k], ll_max_conf[k], ll_max_id[k]])
-        
+                    bboxes.append([ll_box_array[k, 0], ll_box_array[k, 1], ll_box_array[k, 2], ll_max_conf[k], ll_max_id[k]])
+
         bboxes_batch.append(bboxes)
 
     t3 = time.time()
@@ -229,5 +243,5 @@ def post_processing(img, conf_thresh, nms_thresh, output):
     print('                  nms : %f' % (t3 - t2))
     print('Post processing total : %f' % (t3 - t1))
     print('-----------------------------------')
-    
+
     return bboxes_batch
