@@ -55,7 +55,7 @@ def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
 
     _index_a, _index_b = torch.where(center_dist < intersect_dist)  # In the case of inner circle
     if _index_a.numel() != 0 and _index_b.numel() != 0:
-        area_i[_index_a, _index_b] = torch.min(r_a[_index_a].squeeze(), r_b[_index_b]).square()*3.141593
+        area_i[_index_a, _index_b] = torch.min(r_a[_index_a].squeeze(), r_b[_index_b]).square()*math.pi
 
     _index_a, _index_b = torch.where(outersect_dist < center_dist)  # In the case of outer circle
     if _index_a.numel() != 0 and _index_b.numel() != 0:
@@ -104,8 +104,21 @@ def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
     #     area_b = torch.prod(bboxes_b[:, 2:], 1)
     # en = (tl < br).type(tl.type()).prod(dim=2)
     # area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-    area_u = 3.141593*(r_a_sqrd + r_b_sqrd) - area_i
+    area_u = math.pi*(r_a_sqrd + r_b_sqrd) - area_i
     iou = area_i / area_u
+    
+    # centerpoint distance squared
+    rho2 = center_dist.square() / 4
+    if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+        # convex diagonal squared
+        c2 = torch.pow(center_dist+ r_a + r_b, 2) + 1e-16
+        if DIoU:
+            return iou - rho2 / c2  # DIoU
+        elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+            v = (4 / math.pi ** 2)
+            with torch.no_grad():
+                alpha = v / (1 - iou + v)
+            return iou - (rho2 / c2 + v * alpha)  # CIoU
 
     # if GIoU or DIoU or CIoU:
     #     if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
@@ -343,8 +356,8 @@ class Yolo_loss(nn.Module):
             loss_xy += F.binary_cross_entropy(
                 input=output[..., 1], target=target[..., 1], weight=tgt_scale.square(), reduction='sum'
             )
-            loss_r += F.mse_loss(input=output[..., 2], target=target[..., 2], reduction='sum') / 2
-            loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum')
+            loss_r += F.mse_loss(input=output[..., 2], target=target[..., 2], reduction='sum') * 5
+            loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum') / 2
             loss_cls += F.binary_cross_entropy(input=output[..., 4:], target=target[..., 4:], reduction='sum')
             loss_l2 += F.mse_loss(input=output, target=target, reduction='sum')
             assert not loss_r.isnan().any(), 'nan occurs'
@@ -375,9 +388,9 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
     n_val = len(val_dataset)
 
     train_loader = DataLoader(train_dataset, batch_size=config.batch // config.subdivisions, shuffle=True,
-                              num_workers=8, pin_memory=True, drop_last=True, collate_fn=collate)
+                              num_workers=config.workers, pin_memory=True, drop_last=True, collate_fn=collate)
 
-    val_loader = DataLoader(val_dataset, batch_size=config.batch // config.subdivisions, shuffle=True, num_workers=8,
+    val_loader = DataLoader(val_dataset, batch_size=config.batch // config.subdivisions, shuffle=True, num_workers=config.workers,
                             pin_memory=True, drop_last=True, collate_fn=val_collate)
 
     writer = SummaryWriter(log_dir=config.TRAIN_TENSORBOARD_DIR,
@@ -433,6 +446,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
     # scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
 
     criterion = Yolo_loss(device=device, batch=config.batch // config.subdivisions, n_classes=config.classes)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[180, 250], gamma=0.3)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', verbose=True, patience=6, min_lr=1e-7)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, 0.001, 1e-6, 20)
 
@@ -499,7 +513,9 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                                           loss_cls.item(), loss_l2.item()))
 
                 pbar.update(images.shape[0])
-
+            
+            scheduler.step()
+            
             if (epoch+1) % config.VALIDATE_INTERVAL==0:
                 if cfg.use_darknet_cfg:
                     eval_model = Darknet(cfg.cfgfile, inference=True)

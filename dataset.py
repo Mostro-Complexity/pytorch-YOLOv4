@@ -75,7 +75,7 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
     min_w_h = 2*bboxes[:, 2]
 
     bboxes[:, 0] *= (net_w / sx)
-    bboxes[:, 2] *= min(net_w / sx, net_h / sy)
+    bboxes[:, 2] *= max(net_w / sx, net_h / sy)
     bboxes[:, 1] *= (net_h / sy)
 
     if flip:#Horizontal
@@ -379,6 +379,13 @@ class Yolo_dataset(Dataset):
                 # print(img_path)
         if use_mixup == 3:
             out_bboxes = np.concatenate(out_bboxes, axis=0)
+
+        fai = ai.copy()
+        for b in out_bboxes:
+            fai=cv2.circle(fai.astype(np.uint8),tuple(b[:2].astype(int)),int(b[2]),(0, 0, 255),4)
+        cv2.imshow('1',fai)
+        cv2.waitKey()
+
         out_bboxes1 = np.zeros([self.cfg.boxes, 4])
         out_bboxes1[:min(out_bboxes.shape[0], self.cfg.boxes)] = out_bboxes[:min(out_bboxes.shape[0], self.cfg.boxes)]
         return out_img, out_bboxes1
