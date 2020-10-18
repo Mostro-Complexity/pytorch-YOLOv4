@@ -18,10 +18,12 @@ from tool.utils import *
 from tool.torch_utils import *
 from tool.darknet2pytorch import Darknet
 import argparse
-from models import Yolov4,CSPDarkNet53,DenseNet
+from models import Yolov4, CSPDarkNet53, DenseNet
+import glob
 
 """hyper parameters"""
 use_cuda = True
+
 
 def detect_cv2(args):
     import cv2
@@ -29,22 +31,27 @@ def detect_cv2(args):
         args.device = torch.device('cuda')
     else:
         args.device = torch.device('cpu')
+    classname = load_class_names(args.classes)
 
-    eval_model = Yolov4(DenseNet(efficient=False), n_classes=args.classes, inference=True)
-    eval_model.load_state_dict(torch.load(args.weightfile,map_location=args.device))
+    eval_model = Yolov4(DenseNet(efficient=False), n_classes=len(classname), inference=True)
+    eval_model.load_state_dict(torch.load(args.weightfile, map_location=args.device))
     eval_model.to(args.device)
     print('Loading weights from %s... Done!' % (args.weightfile))
 
-    img = cv2.imread(args.imgfile)
-    sized = cv2.resize(img, (320, 320))
-    sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
+    imgfiles = glob.glob(os.path.join(args.imgdir, '*.jpg'))
+    for imgfile in imgfiles:
+        img = cv2.imread(imgfile)
+        sized = ScaleInvariantResize((320, 320))(img)
+        # sized = cv2.resize(img, (320, 320))
+        sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
 
-    start = time.time()
-    boxes = do_detect(eval_model, sized, 0.1, 0.1, args.device)
-    finish = time.time()
-    print('%s: Predicted in %f seconds.' % (args.imgfile, (finish - start)))
+        start = time.time()
+        boxes = do_detect(eval_model, sized, 0.2, 0.4, args.device)
+        finish = time.time()
+        print('%s: Predicted in %f seconds.' % (imgfile, (finish - start)))
 
-    plot_boxes_cv2(img, boxes[0], savename='predictions.jpg', class_names=['a','o'])
+        savename = os.path.join('samples', os.path.basename(imgfile))
+        plot_boxes_cv2(img, boxes[0], savename=savename, class_names=classname)
 
 
 def detect_cv2_camera(cfgfile, weightfile):
@@ -132,10 +139,9 @@ def get_args():
     parser.add_argument('-weightfile', type=str,
                         default='./checkpoints/Yolov4_epoch1.pth',
                         help='path of trained model.', dest='weightfile')
-    parser.add_argument('-imgfile', type=str,
-                        default='./data/mscoco2017/train2017/190109_180343_00154162.jpg',
-                        help='path of your image file.', dest='imgfile')
-    parser.add_argument('-classes', type=int, default=2)
+    parser.add_argument('-imgdir', type=str,
+                        help='path of your image file.', dest='imgdir')
+    parser.add_argument('-classes', type=str, default='data/general/classes.txt')
     args = parser.parse_args()
 
     return args
@@ -143,7 +149,7 @@ def get_args():
 
 if __name__ == '__main__':
     args = get_args()
-    if args.imgfile:
+    if args.imgdir:
         detect_cv2(args)
         # detect_imges(args.cfgfile, args.weightfile)
         # detect_cv2(args.cfgfile, args.weightfile, args.imgfile)

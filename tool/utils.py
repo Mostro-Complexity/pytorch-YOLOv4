@@ -152,21 +152,21 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
 
     width = img.shape[1]
     height = img.shape[0]
-    ratio = 1/max(width,height)
-    dx,dy=(1-ratio*width)/2,(1-ratio*height)/2
+    # ratio = 1/max(width,height)
+    # dx,dy=(1-ratio*width)/2,(1-ratio*height)/2
     for i in range(len(boxes)):
         box = boxes[i]
-        x = int((box[0] + dx) * width)
-        y = int((box[1] + dy) * height)
+        x = int((box[0]) * width)
+        y = int((box[1]) * height)
         r = int(box[2] * max(width, height))
 
         if color:
             rgb = color
         else:
             rgb = (255, 0, 0)
-        if len(box) >= 7 and class_names:
-            cls_conf = box[5]
-            cls_id = box[6]
+        if class_names:
+            cls_conf = box[3]
+            cls_id = box[4]
             print('%s: %f' % (class_names[cls_id], cls_conf))
             classes = len(class_names)
             offset = cls_id * 123457 % classes
@@ -175,7 +175,7 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
             blue = get_color(0, offset, classes)
             if color is None:
                 rgb = (red, green, blue)
-            img = cv2.putText(img, class_names[cls_id], (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.2, rgb, 1)
+            img = cv2.putText(img, '{:s}:{:.4f}'.format(class_names[cls_id], cls_conf), (x, y+r), cv2.FONT_HERSHEY_SIMPLEX, 0.7, rgb, 1)
         img = cv2.circle(img, (x, y), r, rgb, 3)
     if savename:
         print("save plot results to %s" % savename)
