@@ -20,6 +20,31 @@ def softmax(x):
     return x
 
 
+class ScaleInvariantResize(object):
+    def __init__(self, size):
+        self.tsize = (*size, 3)
+
+    def __call__(self, src):
+        if isinstance(src, np.ndarray):
+            sh, sw, _ = src.shape
+            import cv2
+        elif isinstance(src, torch.Tensor):
+            raise NotImplementedError()
+        else:
+            raise TypeError()
+        h, w, _ = self.tsize
+        out = np.empty(self.tsize, dtype=np.uint8)
+        out[:, :] = src.mean(axis=(0, 1))
+        ratio = min(w/sw, h/sh)
+        src = cv2.resize(src, (int(sw*ratio), int(sh*ratio)))
+
+        sh, sw, _ = src.shape
+        left = w//2-sw//2
+        top = h//2-sh//2
+        out[top:top+sh, left:left+sw] = src
+        return out
+
+
 def bbox_iou(box1, box2, x1y1x2y2=True):
 
     # print('iou box1:', box1)
@@ -127,11 +152,13 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
 
     width = img.shape[1]
     height = img.shape[0]
+    ratio = 1/max(width,height)
+    dx,dy=(1-ratio*width)/2,(1-ratio*height)/2
     for i in range(len(boxes)):
         box = boxes[i]
-        x = int(box[0] * width)
-        y = int(box[1] * height)
-        r = int(box[2] * min(width, height))
+        x = int((box[0] + dx) * width)
+        y = int((box[1] + dy) * height)
+        r = int(box[2] * max(width, height))
 
         if color:
             rgb = color

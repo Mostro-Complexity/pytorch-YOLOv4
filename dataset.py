@@ -19,7 +19,7 @@ import numpy as np
 
 import torch
 from torch.utils.data.dataset import Dataset
-
+import tool.utils as utils
 
 def rand_uniform_strong(min, max):
     if min > max:
@@ -51,7 +51,6 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
     bboxes[:, 0] -= dx
     bboxes[:, 1] -= dy
 
-
     bboxes[:, 2] = np.clip(bboxes[:, 2], 0, sx//2)
     bboxes[:, 2] = np.clip(bboxes[:, 2], 0, sy//2)
 
@@ -74,9 +73,13 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
 
     min_w_h = 2*bboxes[:, 2]
 
-    bboxes[:, 0] *= (net_w / sx)
-    bboxes[:, 2] *= max(net_w / sx, net_h / sy)
-    bboxes[:, 1] *= (net_h / sy)
+    ratio = min(net_w/sx, net_h/sy)
+    bboxes[:, 0] *= ratio
+    bboxes[:, 2] *= ratio
+    bboxes[:, 1] *= ratio
+
+    bboxes[:, 0] += (net_w-sx*ratio)//2
+    bboxes[:, 1] += (net_h-sy*ratio)//2
 
     if flip:#Horizontal
         bboxes[:, 0] = net_w - bboxes[:, 0]
@@ -99,81 +102,83 @@ def rect_intersection(a, b):
 
 def image_data_augmentation(mat, w, h, pleft, ptop, swidth, sheight, flip, dhue, dsat, dexp, gaussian_noise, blur,
                             truth):
-    try:
-        img = mat
-        oh, ow, _ = img.shape
-        pleft, ptop, swidth, sheight = int(pleft), int(ptop), int(swidth), int(sheight)
-        # crop
-        src_rect = [pleft, ptop, swidth + pleft, sheight + ptop]  # x1,y1,x2,y2
-        img_rect = [0, 0, ow, oh]
-        new_src_rect = rect_intersection(src_rect, img_rect)  # 交集
+    # try:
+    img = mat
+    oh, ow, _ = img.shape
+    pleft, ptop, swidth, sheight = int(pleft), int(ptop), int(swidth), int(sheight)
+    # crop
+    src_rect = [pleft, ptop, swidth + pleft, sheight + ptop]  # x1,y1,x2,y2
+    img_rect = [0, 0, ow, oh]
+    new_src_rect = rect_intersection(src_rect, img_rect)  # 交集
 
-        dst_rect = [max(0, -pleft), max(0, -ptop), max(0, -pleft) + new_src_rect[2] - new_src_rect[0],
-                    max(0, -ptop) + new_src_rect[3] - new_src_rect[1]]
-        # cv2.Mat sized
+    dst_rect = [max(0, -pleft), max(0, -ptop), max(0, -pleft) + new_src_rect[2] - new_src_rect[0],
+                max(0, -ptop) + new_src_rect[3] - new_src_rect[1]]
+    # cv2.Mat sized
 
-        if (src_rect[0] == 0 and src_rect[1] == 0 and src_rect[2] == img.shape[0] and src_rect[3] == img.shape[1]):
-            sized = cv2.resize(img, (w, h), cv2.INTER_LINEAR)
+    if (src_rect[0] == 0 and src_rect[1] == 0 and src_rect[2] == img.shape[0] and src_rect[3] == img.shape[1]):
+        sized = utils.ScaleInvariantResize((w, h))(img)
+        # sized = cv2.resize(img, (w, h), cv2.INTER_LINEAR)
+    else:
+        cropped = np.zeros([sheight, swidth, 3])
+        cropped[:, :, ] = np.mean(img, axis=(0, 1))
+
+        cropped[dst_rect[1]:dst_rect[3], dst_rect[0]:dst_rect[2]] = \
+            img[new_src_rect[1]:new_src_rect[3], new_src_rect[0]:new_src_rect[2]]
+
+        # resize
+        # sized = cv2.resize(cropped, (w, h), cv2.INTER_LINEAR)
+        sized = utils.ScaleInvariantResize((h, w))(cropped)
+
+    # flip
+    if flip:
+        # cv2.Mat cropped
+        sized = cv2.flip(sized, 1)  # 0 - x-axis, 1 - y-axis, -1 - both axes (x & y)
+
+    # HSV augmentation
+    # cv2.COLOR_BGR2HSV, cv2.COLOR_RGB2HSV, cv2.COLOR_HSV2BGR, cv2.COLOR_HSV2RGB
+    if dsat != 1 or dexp != 1 or dhue != 0:
+        if img.shape[2] >= 3:
+            hsv_src = cv2.cvtColor(sized.astype(np.float32), cv2.COLOR_RGB2HSV)  # RGB to HSV
+            hsv = cv2.split(hsv_src)
+            hsv[1] *= dsat
+            hsv[2] *= dexp
+            hsv[0] += 179 * dhue
+            hsv_src = cv2.merge(hsv)
+            sized = np.clip(cv2.cvtColor(hsv_src, cv2.COLOR_HSV2RGB), 0, 255)  # HSV to RGB (the same as previous)
         else:
-            cropped = np.zeros([sheight, swidth, 3])
-            cropped[:, :, ] = np.mean(img, axis=(0, 1))
+            sized *= dexp
 
-            cropped[dst_rect[1]:dst_rect[3], dst_rect[0]:dst_rect[2]] = \
-                img[new_src_rect[1]:new_src_rect[3], new_src_rect[0]:new_src_rect[2]]
+    if blur:
+        if blur == 1:
+            dst = cv2.GaussianBlur(sized, (17, 17), 0)
+            # cv2.bilateralFilter(sized, dst, 17, 75, 75)
+        else:
+            ksize = (blur / 2) * 2 + 1
+            dst = cv2.GaussianBlur(sized, (ksize, ksize), 0)
 
-            # resize
-            sized = cv2.resize(cropped, (w, h), cv2.INTER_LINEAR)
+        if blur == 1:
+            img_rect = [0, 0, sized.cols, sized.rows]
+            for b in truth:
+                left = (b.x - b.w / 2.) * sized.shape[1]
+                width = b.w * sized.shape[1]
+                top = (b.y - b.h / 2.) * sized.shape[0]
+                height = b.h * sized.shape[0]
+                roi(left, top, width, height)
+                roi = roi & img_rect
+                dst[roi[0]:roi[0] + roi[2], roi[1]:roi[1] + roi[3]] = sized[roi[0]:roi[0] + roi[2],
+                                                                            roi[1]:roi[1] + roi[3]]
 
-        # flip
-        if flip:
-            # cv2.Mat cropped
-            sized = cv2.flip(sized, 1)  # 0 - x-axis, 1 - y-axis, -1 - both axes (x & y)
+        sized = dst
 
-        # HSV augmentation
-        # cv2.COLOR_BGR2HSV, cv2.COLOR_RGB2HSV, cv2.COLOR_HSV2BGR, cv2.COLOR_HSV2RGB
-        if dsat != 1 or dexp != 1 or dhue != 0:
-            if img.shape[2] >= 3:
-                hsv_src = cv2.cvtColor(sized.astype(np.float32), cv2.COLOR_RGB2HSV)  # RGB to HSV
-                hsv = cv2.split(hsv_src)
-                hsv[1] *= dsat
-                hsv[2] *= dexp
-                hsv[0] += 179 * dhue
-                hsv_src = cv2.merge(hsv)
-                sized = np.clip(cv2.cvtColor(hsv_src, cv2.COLOR_HSV2RGB), 0, 255)  # HSV to RGB (the same as previous)
-            else:
-                sized *= dexp
-
-        if blur:
-            if blur == 1:
-                dst = cv2.GaussianBlur(sized, (17, 17), 0)
-                # cv2.bilateralFilter(sized, dst, 17, 75, 75)
-            else:
-                ksize = (blur / 2) * 2 + 1
-                dst = cv2.GaussianBlur(sized, (ksize, ksize), 0)
-
-            if blur == 1:
-                img_rect = [0, 0, sized.cols, sized.rows]
-                for b in truth:
-                    left = (b.x - b.w / 2.) * sized.shape[1]
-                    width = b.w * sized.shape[1]
-                    top = (b.y - b.h / 2.) * sized.shape[0]
-                    height = b.h * sized.shape[0]
-                    roi(left, top, width, height)
-                    roi = roi & img_rect
-                    dst[roi[0]:roi[0] + roi[2], roi[1]:roi[1] + roi[3]] = sized[roi[0]:roi[0] + roi[2],
-                                                                                roi[1]:roi[1] + roi[3]]
-
-            sized = dst
-
-        if gaussian_noise:
-            noise = np.array(sized.shape)
-            gaussian_noise = min(gaussian_noise, 127)
-            gaussian_noise = max(gaussian_noise, 0)
-            cv2.randn(noise, 0, gaussian_noise)  # mean and variance
-            sized = sized + noise
-    except:
-        print("OpenCV can't augment image: " + str(w) + " x " + str(h))
-        sized = mat
+    if gaussian_noise:
+        noise = np.array(sized.shape)
+        gaussian_noise = min(gaussian_noise, 127)
+        gaussian_noise = max(gaussian_noise, 0)
+        cv2.randn(noise, 0, gaussian_noise)  # mean and variance
+        sized = sized + noise
+    # except:
+    #     print("OpenCV can't augment image: " + str(w) + " x " + str(h))
+    #     sized = mat
 
     return sized
 
