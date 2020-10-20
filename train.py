@@ -32,7 +32,7 @@ from easydict import EasyDict as edict
 
 from dataset import Yolo_dataset
 from cfg import Cfg
-from models import Yolov4,CSPDarkNet53,DenseNet
+from models import Yolov4, CSPDarkNet53, DenseNet
 from tool.darknet2pytorch import Darknet
 
 from tool.tv_reference.utils import collate_fn as val_collate
@@ -106,12 +106,12 @@ def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
     # area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
     area_u = math.pi*(r_a_sqrd + r_b_sqrd) - area_i
     iou = area_i / area_u
-    
+
     # centerpoint distance squared
     rho2 = center_dist.square() / 4
     if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
         # convex diagonal squared
-        c2 = torch.pow(center_dist+ r_a + r_b, 2) + 1e-16
+        c2 = torch.pow(center_dist + r_a + r_b, 2) + 1e-16
         if DIoU:
             return iou - rho2 / c2  # DIoU
         elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
@@ -235,7 +235,7 @@ class Yolo_loss(nn.Module):
         self.n_classes = n_classes
         self.n_anchors = n_anchors
 
-        self.anchors = [12, 19, 28, 36, 76, 146, 243, 365, 459]
+        self.anchors = [12, 19, 28, 36, 76, 146, 200, 263, 312]
         self.anch_masks = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
         self.ignore_thre = 0.5
 
@@ -318,7 +318,7 @@ class Yolo_loss(nn.Module):
                     target[b, a, j, i, 2] = torch.log(truth_r_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti]] + 1e-16)
                     target[b, a, j, i, 3] = 1
                     target[b, a, j, i, 4 + labels[b, ti, 3].to(torch.int16).cpu().numpy()] = 1
-                    tgt_scale[b, a, j, i] = torch.sqrt(2 - torch.square(truth_r_all[b, ti] / fsize)) 
+                    tgt_scale[b, a, j, i] = torch.sqrt(2 - torch.square(truth_r_all[b, ti] / fsize))
         return obj_mask, tgt_mask, tgt_scale, target
 
     def forward(self, xin, labels=None):
@@ -344,11 +344,11 @@ class Yolo_loss(nn.Module):
             # loss calculation
             output[..., 3] *= obj_mask
             output[..., np.r_[:3, 4:n_ch]] *= tgt_mask
-            output[..., 2] *= tgt_scale
+            # output[..., 2] *= tgt_scale
 
             target[..., 3] *= obj_mask
             target[..., np.r_[:3, 4:n_ch]] *= tgt_mask
-            target[..., 2] *= tgt_scale
+            # target[..., 2] *= tgt_scale
 
             loss_xy += F.binary_cross_entropy(
                 input=output[..., 0], target=target[..., 0], weight=tgt_scale.square(), reduction='sum'
@@ -513,36 +513,36 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                                           loss_cls.item(), loss_l2.item()))
 
                 pbar.update(images.shape[0])
-            
-            scheduler.step()
-            
-            if (epoch+1) % config.VALIDATE_INTERVAL==0:
-                if cfg.use_darknet_cfg:
-                    eval_model = Darknet(cfg.cfgfile, inference=True)
-                else:
-                    eval_model = Yolov4(DenseNet(efficient=True),yolov4weight=cfg.pretrained, n_classes=cfg.classes, inference=True)
-                # eval_model = Yolov4(yolov4conv137weight=None, n_classes=config.classes, inference=True)
-                if torch.cuda.device_count() > 1:
-                    eval_model.load_state_dict(model.module.state_dict())
-                else:
-                    eval_model.load_state_dict(model.state_dict())
-                eval_model.to(device)
-                evaluator = evaluate(eval_model, val_loader, config, device)
-                del eval_model
 
-                stats = evaluator.coco_eval['bbox'].stats
-                writer.add_scalar('train/AP', stats[0], global_step)
-                writer.add_scalar('train/AP50', stats[1], global_step)
-                writer.add_scalar('train/AP75', stats[2], global_step)
-                writer.add_scalar('train/AP_small', stats[3], global_step)
-                writer.add_scalar('train/AP_medium', stats[4], global_step)
-                writer.add_scalar('train/AP_large', stats[5], global_step)
-                writer.add_scalar('train/AR1', stats[6], global_step)
-                writer.add_scalar('train/AR10', stats[7], global_step)
-                writer.add_scalar('train/AR100', stats[8], global_step)
-                writer.add_scalar('train/AR_small', stats[9], global_step)
-                writer.add_scalar('train/AR_medium', stats[10], global_step)
-                writer.add_scalar('train/AR_large', stats[11], global_step)
+            scheduler.step()
+
+            # if (epoch+1) % config.VALIDATE_INTERVAL == 0:
+            #     if cfg.use_darknet_cfg:
+            #         eval_model = Darknet(cfg.cfgfile, inference=True)
+            #     else:
+            #         eval_model = Yolov4(DenseNet(efficient=True), yolov4weight=cfg.pretrained, n_classes=cfg.classes, inference=True)
+            #     # eval_model = Yolov4(yolov4conv137weight=None, n_classes=config.classes, inference=True)
+            #     if torch.cuda.device_count() > 1:
+            #         eval_model.load_state_dict(model.module.state_dict())
+            #     else:
+            #         eval_model.load_state_dict(model.state_dict())
+            #     eval_model.to(device)
+            #     evaluator = evaluate(eval_model, val_loader, config, device)
+            #     del eval_model
+
+            #     stats = evaluator.coco_eval['bbox'].stats
+            #     writer.add_scalar('train/AP', stats[0], global_step)
+            #     writer.add_scalar('train/AP50', stats[1], global_step)
+            #     writer.add_scalar('train/AP75', stats[2], global_step)
+            #     writer.add_scalar('train/AP_small', stats[3], global_step)
+            #     writer.add_scalar('train/AP_medium', stats[4], global_step)
+            #     writer.add_scalar('train/AP_large', stats[5], global_step)
+            #     writer.add_scalar('train/AR1', stats[6], global_step)
+            #     writer.add_scalar('train/AR10', stats[7], global_step)
+            #     writer.add_scalar('train/AR100', stats[8], global_step)
+            #     writer.add_scalar('train/AR_small', stats[9], global_step)
+            #     writer.add_scalar('train/AR_medium', stats[10], global_step)
+            #     writer.add_scalar('train/AR_large', stats[11], global_step)
 
             if save_cp:
                 try:
@@ -716,7 +716,10 @@ if __name__ == "__main__":
     if cfg.use_darknet_cfg:
         model = Darknet(cfg.cfgfile)
     else:
-        model = Yolov4(DenseNet(efficient=True),yolov4weight=cfg.pretrained, n_classes=cfg.classes)
+        model = Yolov4(DenseNet(efficient=True), yolov4weight=cfg.pretrained, n_classes=cfg.classes)
+
+    if cfg.load is not None:
+        model.load_state_dict(torch.load(cfg.load, map_location=device))
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
