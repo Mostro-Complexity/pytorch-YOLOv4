@@ -448,7 +448,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
     # scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
 
     criterion = Yolo_loss(device=device, batch=config.batch // config.subdivisions, n_classes=config.classes)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[180, 250], gamma=0.3)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 250], gamma=0.3)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', verbose=True, patience=6, min_lr=1e-7)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, 0.001, 1e-6, 20)
 

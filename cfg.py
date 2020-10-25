@@ -45,7 +45,7 @@ Cfg.cutmix = 0
 Cfg.mosaic = 0
 
 Cfg.letter_box = 0
-Cfg.jitter = 0.2
+Cfg.jitter = 0.05
 Cfg.classes = 80
 Cfg.track = 0
 Cfg.w = Cfg.width

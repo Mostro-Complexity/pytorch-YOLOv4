@@ -88,6 +88,7 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
     bboxes[:, 1] = np.clip(bboxes[:, 1], 0, net_h - 1e-8)
     _select=(bboxes[:,2]>608)|(bboxes[:,2]<0)
     assert not _select.any(), "Illegal coordinates"
+    assert len(bboxes) != 0, "Illegal bboxes"
     return bboxes, min_w_h
 
 
