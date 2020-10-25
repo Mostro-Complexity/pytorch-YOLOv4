@@ -1,0 +1,73 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "demo",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/demo.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-weightfile=checkpoints/Yolov4_epoch300.pth",
+                "-imgdir=data/coco/train"
+            ]
+        },
+        {
+            "name": "train",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-g=0",
+                "-l=0.0001",
+                // "-f=checkpoints/Yolov4_epoch16.pth",
+                "-dir=data/labelme/apple_orange",
+                "-train_label_path=data/general/train.txt",
+                "-classes=2"
+            ]
+        },
+        {
+            "name": "dataset format convert (coco2general)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/tool/coco_annotation.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "dataset format convert (labelme2coco)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/tool/format_convert.py",
+            "cwd": "${workspaceRoot}",
+            "console": "integratedTerminal",
+            "args": [
+                "-i=data/labelme",
+                "-o=data/coco/annotations/trainval.json",
+                "-t=coco"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceRoot}"
+            }
+        },
+        {
+            "name": "dataset format convert (labelme2yolo)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/tool/format_convert.py",
+            "cwd": "${workspaceRoot}",
+            "console": "integratedTerminal",
+            "args": [
+                "-i=data/labelme",
+                "-o=data/general/train.txt",
+                "-t=yolo"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceRoot}"
+            }
+        }
+    ]
+}

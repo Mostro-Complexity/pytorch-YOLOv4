@@ -15,7 +15,8 @@ runs
 log
 
 *.jpg
-*.json
 data/outcome
 
 data
+
+.vscode/settings.json
