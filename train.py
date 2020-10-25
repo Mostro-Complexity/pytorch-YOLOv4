@@ -315,7 +315,7 @@ class Yolo_loss(nn.Module):
                     # Deactivation for truth
                     target[b, a, j, i, 0] = truth_x_all[b, ti] - truth_x_all[b, ti].to(torch.int16).to(torch.float)
                     target[b, a, j, i, 1] = truth_y_all[b, ti] - truth_y_all[b, ti].to(torch.int16).to(torch.float)
-                    target[b, a, j, i, 2] = torch.log(truth_r_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti]] + 1e-16)
+                    target[b, a, j, i, 2] = truth_r_all[b, ti] + 1e-16
                     target[b, a, j, i, 3] = 1
                     target[b, a, j, i, 4 + labels[b, ti, 3].to(torch.int16).cpu().numpy()] = 1
                     tgt_scale[b, a, j, i] = torch.sqrt(2 - torch.square(truth_r_all[b, ti] / fsize))
@@ -344,6 +344,8 @@ class Yolo_loss(nn.Module):
             # loss calculation
             output[..., 3] *= obj_mask
             output[..., np.r_[:3, 4:n_ch]] *= tgt_mask
+            pred[..., 2] *= tgt_mask[..., 2]
+            pred[..., 2] += 1e-16
             # output[..., 2] *= tgt_scale
 
             target[..., 3] *= obj_mask
@@ -356,7 +358,7 @@ class Yolo_loss(nn.Module):
             loss_xy += F.binary_cross_entropy(
                 input=output[..., 1], target=target[..., 1], weight=tgt_scale.square(), reduction='sum'
             )
-            loss_r += F.mse_loss(input=output[..., 2], target=target[..., 2], reduction='sum') * 5
+            loss_r += F.mse_loss(input=pred[..., 2].sqrt(), target=target[..., 2].sqrt(), reduction='sum') * 5
             loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum') / 2
             loss_cls += F.binary_cross_entropy(input=output[..., 4:], target=target[..., 4:], reduction='sum')
             loss_l2 += F.mse_loss(input=output, target=target, reduction='sum')
