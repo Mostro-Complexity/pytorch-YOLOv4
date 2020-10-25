@@ -5,25 +5,50 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "demo",
+            "name": "demo (cherry)",
             "type": "python",
             "request": "launch",
             "program": "${workspaceRoot}/demo.py",
             "console": "integratedTerminal",
             "args": [
                 "-weightfile=checkpoints/Yolov4_epoch300.pth",
-                "-imgdir=data/coco/train"
+                "-imgdir=data/labelme/cherry"
             ]
         },
         {
-            "name": "train",
+            "name": "train (cherry)",
             "type": "python",
             "request": "launch",
             "program": "${workspaceRoot}/train.py",
             "console": "integratedTerminal",
             "args": [
                 "-g=0",
-                "-l=0.0001",
+                "-l=0.001",
+                "-dir=data/labelme/cherry",
+                "-train_label_path=data/general/train.txt",
+                "-classes=3"
+            ]
+        },
+        {
+            "name": "demo (apple orange)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/demo.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-weightfile=checkpoints/Yolov4_epoch300.pth",
+                "-imgdir=data/labelme/apple_orange"
+            ]
+        },
+        {
+            "name": "train (apple orange)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-g=0",
+                "-l=0.001",
                 // "-f=checkpoints/Yolov4_epoch16.pth",
                 "-dir=data/labelme/apple_orange",
                 "-train_label_path=data/general/train.txt",
@@ -54,14 +79,30 @@
             }
         },
         {
-            "name": "dataset format convert (labelme2yolo)",
+            "name": "dataset format convert (labelme2yolo, cherry)",
             "type": "python",
             "request": "launch",
             "program": "${workspaceRoot}/tool/format_convert.py",
             "cwd": "${workspaceRoot}",
             "console": "integratedTerminal",
             "args": [
-                "-i=data/labelme",
+                "-i=data/labelme/cherry",
+                "-o=data/general/train.txt",
+                "-t=yolo"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceRoot}"
+            }
+        },
+        {
+            "name": "dataset format convert (labelme2yolo, apple orange)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/tool/format_convert.py",
+            "cwd": "${workspaceRoot}",
+            "console": "integratedTerminal",
+            "args": [
+                "-i=data/labelme/apple_orange",
                 "-o=data/general/train.txt",
                 "-t=yolo"
             ],
