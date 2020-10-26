@@ -28,6 +28,7 @@ from torch.utils.data import DataLoader
 from torch import optim
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 from easydict import EasyDict as edict
 
 from dataset import Yolo_dataset
@@ -227,11 +228,11 @@ def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False
 
 
 class Yolo_loss(nn.Module):
-    def __init__(self, n_classes=80, n_anchors=3, device=None, batch=2):
+    def __init__(self, image_size=(320, 320), n_classes=80, n_anchors=3, device=None, batch=2):
         super(Yolo_loss, self).__init__()
         self.device = device
         self.strides = [8, 16, 32]
-        image_size = 320
+        self.image_size = torch.tensor(image_size)
         self.n_classes = n_classes
         self.n_anchors = n_anchors
 
@@ -248,10 +249,10 @@ class Yolo_loss(nn.Module):
             ref_anchors[:, 2] = np.array(all_anchors_grid, dtype=np.float32)
             ref_anchors = torch.from_numpy(ref_anchors)
             # calculate pred - xyr obj cls
-            fsize = image_size // self.strides[i]
-            grid_x = torch.arange(fsize, dtype=torch.float).repeat(batch, 3, fsize, 1).to(device)
-            grid_y = torch.arange(fsize, dtype=torch.float).repeat(batch, 3, fsize, 1).permute(0, 1, 3, 2).to(device)
-            anchor_r = torch.from_numpy(masked_anchors).repeat(batch, fsize, fsize, 1).permute(0, 3, 1, 2).to(device)
+            fsize = self.image_size // self.strides[i]
+            grid_x = torch.arange(fsize[0], dtype=torch.float).repeat(batch, 3, fsize[1], 1).to(device)
+            grid_y = torch.arange(fsize[1], dtype=torch.float).repeat(batch, 3, fsize[0], 1).permute(0, 1, 3, 2).to(device)
+            anchor_r = torch.from_numpy(masked_anchors).repeat(batch, fsize[1], fsize[0], 1).permute(0, 3, 1, 2).to(device)
 
             self.masked_anchors.append(masked_anchors)
             self.ref_anchors.append(ref_anchors)
@@ -261,10 +262,10 @@ class Yolo_loss(nn.Module):
 
     def build_target(self, pred, labels, batchsize, fsize, n_ch, output_id):
         # target assignment
-        tgt_mask = torch.zeros(batchsize, self.n_anchors, fsize, fsize, 3 + self.n_classes).to(device=self.device)
-        obj_mask = torch.ones(batchsize, self.n_anchors, fsize, fsize).to(device=self.device)
-        tgt_scale = torch.zeros(batchsize, self.n_anchors, fsize, fsize).to(self.device)
-        target = torch.zeros(batchsize, self.n_anchors, fsize, fsize, n_ch).to(self.device)
+        tgt_mask = torch.zeros(batchsize, self.n_anchors, fsize[1], fsize[0], 3 + self.n_classes).to(device=self.device)
+        obj_mask = torch.ones(batchsize, self.n_anchors, fsize[1], fsize[0]).to(device=self.device)
+        tgt_scale = torch.zeros(batchsize, self.n_anchors, fsize[1], fsize[0]).to(self.device)
+        target = torch.zeros(batchsize, self.n_anchors, fsize[1], fsize[0], n_ch).to(self.device)
 
         # labels = labels.cpu().data
         nlabel = (labels.sum(dim=2) > 0).sum(dim=1)  # number of objects
@@ -318,17 +319,17 @@ class Yolo_loss(nn.Module):
                     target[b, a, j, i, 2] = truth_r_all[b, ti] + 1e-16
                     target[b, a, j, i, 3] = 1
                     target[b, a, j, i, 4 + labels[b, ti, 3].to(torch.int16).cpu().numpy()] = 1
-                    tgt_scale[b, a, j, i] = torch.sqrt(2 - torch.square(truth_r_all[b, ti] / fsize))
+                    tgt_scale[b, a, j, i] = torch.sqrt(2 - torch.square(truth_r_all[b, ti]) / fsize[0] / fsize[1])
         return obj_mask, tgt_mask, tgt_scale, target
 
     def forward(self, xin, labels=None):
         loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = 0, 0, 0, 0, 0, 0
         for output_id, output in enumerate(xin):
             batchsize = output.shape[0]
-            fsize = output.shape[2]
+            fsize = self.image_size // self.strides[output_id]  # w,h
             n_ch = 4 + self.n_classes
 
-            output = output.view(batchsize, self.n_anchors, n_ch, fsize, fsize)
+            output = output.view(batchsize, self.n_anchors, n_ch, fsize[1], fsize[0])  # h,w
             output = output.permute(0, 1, 3, 4, 2)  # .contiguous()
 
             # logistic activation for xyr, obj, cls
@@ -447,10 +448,11 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
         )
     # scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
 
-    criterion = Yolo_loss(device=device, batch=config.batch // config.subdivisions, n_classes=config.classes)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 250], gamma=0.3)
+    criterion = Yolo_loss(image_size=(config.w, config.h), device=device, batch=config.batch // config.subdivisions, n_classes=config.classes)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 350], gamma=0.3)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', verbose=True, patience=6, min_lr=1e-7)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, 0.001, 1e-6, 20)
+    scaler = GradScaler()
 
     save_prefix = 'Yolov4_epoch'
     saved_models = deque()
@@ -477,7 +479,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
 
                 loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = criterion(bboxes_pred, bboxes)
                 # loss = loss / config.subdivisions
-                loss.backward()
+                scaler.scale(loss).backward()
                 # nn.utils.clip_grad_norm_(model.parameters(), max_norm=40, norm_type=2)
                 epoch_loss += loss.item()
                 pbar.set_description(
@@ -489,7 +491,8 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                 )
 
                 if global_step % config.subdivisions == 0:
-                    optimizer.step()
+                    scaler.step(optimizer)
+                    scaler.update()
                     # scheduler.step()
                     model.zero_grad()
 
