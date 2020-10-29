@@ -175,7 +175,7 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
             blue = get_color(0, offset, classes)
             if color is None:
                 rgb = (red, green, blue)
-            img = cv2.putText(img, '{:s}:{:.4f}'.format(class_names[cls_id], cls_conf), (x, y+r), cv2.FONT_HERSHEY_SIMPLEX, 0.7, rgb, 1)
+            img = cv2.putText(img, '{:s}:{:.4f}'.format(class_names[cls_id], cls_conf), (x, y+r), cv2.FONT_HERSHEY_SIMPLEX, 1.7, rgb, 1)
         img = cv2.circle(img, (x, y), r, rgb, 3)
     if savename:
         print("save plot results to %s" % savename)

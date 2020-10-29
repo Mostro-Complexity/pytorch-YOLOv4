@@ -353,12 +353,7 @@ class Yolo_loss(nn.Module):
             target[..., np.r_[:3, 4:n_ch]] *= tgt_mask
             # target[..., 2] *= tgt_scale
 
-            loss_xy += F.binary_cross_entropy(
-                input=output[..., 0], target=target[..., 0], weight=tgt_scale.square(), reduction='sum'
-            )
-            loss_xy += F.binary_cross_entropy(
-                input=output[..., 1], target=target[..., 1], weight=tgt_scale.square(), reduction='sum'
-            )
+            loss_xy += F.mse_loss(input=output, target=target, reduction='sum')
             loss_r += F.mse_loss(input=pred[..., 2].sqrt(), target=target[..., 2].sqrt(), reduction='sum') * 5
             loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum') / 2
             loss_cls += F.binary_cross_entropy(input=output[..., 4:], target=target[..., 4:], reduction='sum')
@@ -449,7 +444,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
     # scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
 
     criterion = Yolo_loss(image_size=(config.w, config.h), device=device, batch=config.batch // config.subdivisions, n_classes=config.classes)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 350], gamma=0.3)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[350, 400, 450], gamma=0.3)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', verbose=True, patience=6, min_lr=1e-7)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, 0.001, 1e-6, 20)
     scaler = GradScaler()

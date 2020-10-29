@@ -386,11 +386,11 @@ class Yolo_dataset(Dataset):
         if use_mixup == 3:
             out_bboxes = np.concatenate(out_bboxes, axis=0)
 
-        # fai = ai.copy()
-        # for b in out_bboxes:
-        #     fai=cv2.circle(fai.astype(np.uint8),tuple(b[:2].astype(int)),int(b[2]),(0, 0, 255),4)
-        # cv2.imshow('1',fai)
-        # cv2.waitKey()
+        fai = ai.copy()
+        for b in out_bboxes:
+            fai=cv2.circle(fai.astype(np.uint8),tuple(b[:2].astype(int)),int(b[2]),(0, 0, 255),4)
+        cv2.imshow('1',fai)
+        cv2.waitKey()
 
         out_bboxes1 = np.zeros([self.cfg.boxes, 4])
         out_bboxes1[:min(out_bboxes.shape[0], self.cfg.boxes)] = out_bboxes[:min(out_bboxes.shape[0], self.cfg.boxes)]

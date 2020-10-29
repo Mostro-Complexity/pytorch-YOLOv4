@@ -41,12 +41,12 @@ def detect_cv2(args):
     imgfiles = glob.glob(os.path.join(args.imgdir, '*.jpg'))
     for imgfile in imgfiles:
         img = cv2.imread(imgfile)
-        sized = ScaleInvariantResize((800, 512))(img)
+        sized = ScaleInvariantResize((416, 416))(img)
         # sized = cv2.resize(img, (320, 320))
         sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
 
         start = time.time()
-        boxes = do_detect(eval_model, sized, 0.2, 0.2, args.device)
+        boxes = do_detect(eval_model, sized, 0.01, 0.2, args.device)
         finish = time.time()
         print('%s: Predicted in %f seconds.' % (imgfile, (finish - start)))
 
