@@ -158,7 +158,7 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
         box = boxes[i]
         x = int((box[0]) * width)
         y = int((box[1]) * height)
-        r = int(box[2] * max(width, height))
+        r = int(box[2] * min(width, height))
 
         if color:
             rgb = color

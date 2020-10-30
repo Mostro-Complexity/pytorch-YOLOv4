@@ -246,7 +246,7 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
     # normalize coordinates to [0, 1]
     bx /= output.size(3)
     by /= output.size(2)
-    br /= output.size(2)
+    br /= min(output.size(2), output.size(3))
 
     # Shape: [batch, num_anchors * H * W, 1]
     bx = bx.view(output.size(0), num_anchors * output.size(2) * output.size(3), 1)

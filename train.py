@@ -228,7 +228,7 @@ def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False
 
 
 class Yolo_loss(nn.Module):
-    def __init__(self, image_size=(320, 320), n_classes=80, n_anchors=3, device=None, batch=2):
+    def __init__(self, image_size=(320, 320), n_classes=80, anchors=[12, 19, 28, 36, 76, 146, 200, 263, 312], n_anchors=3, device=None, batch=2):
         super(Yolo_loss, self).__init__()
         self.device = device
         self.strides = [8, 16, 32]
@@ -236,7 +236,7 @@ class Yolo_loss(nn.Module):
         self.n_classes = n_classes
         self.n_anchors = n_anchors
 
-        self.anchors = [12, 19, 28, 36, 76, 146, 200, 263, 312]
+        self.anchors = anchors
         self.anch_masks = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
         self.ignore_thre = 0.5
 
@@ -378,7 +378,7 @@ def collate(batch):
     return images, bboxes
 
 
-def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=20, img_scale=0.5):
+def train(model, device, config, anchors, epochs=5, batch_size=1, save_cp=True, log_step=20, img_scale=0.5):
     train_dataset = Yolo_dataset(config.train_label, config, train=True)
     val_dataset = Yolo_dataset(config.val_label, config, train=False)
 
@@ -443,8 +443,8 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
         )
     # scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
 
-    criterion = Yolo_loss(image_size=(config.w, config.h), device=device, batch=config.batch // config.subdivisions, n_classes=config.classes)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[350, 400, 450], gamma=0.3)
+    criterion = Yolo_loss(image_size=(config.w, config.h), device=device, batch=config.batch // config.subdivisions, n_classes=config.classes, anchors=anchors)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[350, 400, 450], gamma=0.7)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', verbose=True, patience=6, min_lr=1e-7)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, 0.001, 1e-6, 20)
     scaler = GradScaler()
@@ -712,11 +712,12 @@ if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = cfg.gpu
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
+    anchors = [12, 19, 28, 36, 76, 146, 200, 263, 312]
 
     if cfg.use_darknet_cfg:
         model = Darknet(cfg.cfgfile)
     else:
-        model = Yolov4(DenseNet(efficient=True), yolov4weight=cfg.pretrained, n_classes=cfg.classes)
+        model = Yolov4(DenseNet(efficient=True), yolov4weight=cfg.pretrained, anchors=anchors, n_classes=cfg.classes)
 
     if cfg.load is not None:
         model.load_state_dict(torch.load(cfg.load, map_location=device))
@@ -729,7 +730,8 @@ if __name__ == "__main__":
         train(model=model,
               config=cfg,
               epochs=cfg.TRAIN_EPOCHS,
-              device=device, )
+              device=device,
+              anchors=anchors )
     except KeyboardInterrupt:
         torch.save(model.state_dict(), 'INTERRUPTED.pth')
         logging.info('Saved interrupt')
