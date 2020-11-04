@@ -11,8 +11,17 @@ def circle2segmentation(points):
     return out_points
 
 
+def rectangle2segmentation(points):
+    left_top = points[0]
+    left_bottom = np.array([points[0, 0], points[1, 1]])
+    right_bottom = points[1]
+    right_top = np.array([points[1, 0], points[0, 1]])
+    return np.stack([left_top, left_bottom, right_bottom, right_top])
+
+
 shape_methods = {
-    'circle': circle2segmentation
+    'circle': circle2segmentation,
+    'rectangle': rectangle2segmentation
 }
 
 
