@@ -132,7 +132,7 @@ class Yolo_loss(nn.Module):
         super(Yolo_loss, self).__init__()
         self.device = device
         self.strides = [8, 16, 32]
-        image_size = 608
+        image_size = 416
         self.n_classes = n_classes
         self.n_anchors = n_anchors
 
@@ -223,10 +223,8 @@ class Yolo_loss(nn.Module):
                     tgt_mask[b, a, j, i, :] = 1
                     target[b, a, j, i, 0] = truth_x_all[b, ti] - truth_x_all[b, ti].to(torch.int16).to(torch.float)
                     target[b, a, j, i, 1] = truth_y_all[b, ti] - truth_y_all[b, ti].to(torch.int16).to(torch.float)
-                    target[b, a, j, i, 2] = torch.log(
-                        truth_w_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti], 0] + 1e-16)
-                    target[b, a, j, i, 3] = torch.log(
-                        truth_h_all[b, ti] / torch.Tensor(self.masked_anchors[output_id])[best_n[ti], 1] + 1e-16)
+                    target[b, a, j, i, 2] = truth_w_all[b, ti] 
+                    target[b, a, j, i, 3] = truth_h_all[b, ti] 
                     target[b, a, j, i, 4] = 1
                     target[b, a, j, i, 5 + labels[b, ti, 4].to(torch.int16).cpu().numpy()] = 1
                     tgt_scale[b, a, j, i, :] = torch.sqrt(2 - truth_w_all[b, ti] * truth_h_all[b, ti] / fsize / fsize)
@@ -256,15 +254,14 @@ class Yolo_loss(nn.Module):
             # loss calculation
             output[..., 4] *= obj_mask
             output[..., np.r_[0:4, 5:n_ch]] *= tgt_mask
-            output[..., 2:4] *= tgt_scale
+            # output[..., 2:4] *= tgt_scale
 
             target[..., 4] *= obj_mask
             target[..., np.r_[0:4, 5:n_ch]] *= tgt_mask
-            target[..., 2:4] *= tgt_scale
+            # target[..., 2:4] *= tgt_scale
 
-            loss_xy += F.binary_cross_entropy(input=output[..., :2], target=target[..., :2],
-                                              weight=tgt_scale * tgt_scale, reduction='sum')
-            loss_wh += F.mse_loss(input=output[..., 2:4], target=target[..., 2:4], reduction='sum') / 2
+            loss_xy += F.binary_cross_entropy(input=output[..., :2], target=target[..., :2], reduction='sum')
+            loss_wh += F.mse_loss(input=pred[..., 2:4], target=target[..., 2:4], reduction='sum') / 2
             loss_obj += F.binary_cross_entropy(input=output[..., 4], target=target[..., 4], reduction='sum')
             loss_cls += F.binary_cross_entropy(input=output[..., 5:], target=target[..., 5:], reduction='sum')
             loss_l2 += F.mse_loss(input=output, target=target, reduction='sum')
@@ -352,7 +349,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
             momentum=config.momentum,
             weight_decay=config.decay,
         )
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
+    # scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
 
     criterion = Yolo_loss(device=device, batch=config.batch // config.subdivisions, n_classes=config.classes)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', verbose=True, patience=6, min_lr=1e-7)
@@ -391,7 +388,7 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                 )
                 if global_step % config.subdivisions == 0:
                     optimizer.step()
-                    scheduler.step()
+                    # scheduler.step()
                     model.zero_grad()
 
                 if global_step % (log_step * config.subdivisions) == 0:
@@ -401,37 +398,37 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                     writer.add_scalar('train/loss_obj', loss_obj.item(), global_step)
                     writer.add_scalar('train/loss_cls', loss_cls.item(), global_step)
                     writer.add_scalar('train/loss_l2', loss_l2.item(), global_step)
-                    writer.add_scalar('lr', scheduler.get_lr()[0] * config.batch, global_step)
+                    # writer.add_scalar('lr', scheduler.get_lr()[0] * config.batch, global_step)
                     pbar.set_postfix(**{'loss (batch)': loss.item(), 'loss_xy': loss_xy.item(),
                                         'loss_wh': loss_wh.item(),
                                         'loss_obj': loss_obj.item(),
                                         'loss_cls': loss_cls.item(),
-                                        'loss_l2': loss_l2.item(),
-                                        'lr': scheduler.get_lr()[0] * config.batch
+                                        'loss_l2': loss_l2.item()
+                                        # 'lr': scheduler.get_lr()[0] * config.batch
                                         })
                     logging.debug('Train step_{}: loss : {},loss xy : {},loss wh : {},'
-                                  'loss obj : {}，loss cls : {},loss l2 : {},lr : {}'
+                                  'loss obj : {}，loss cls : {},loss l2 : {}'
                                   .format(global_step, loss.item(), loss_xy.item(),
                                           loss_wh.item(), loss_obj.item(),
-                                          loss_cls.item(), loss_l2.item(),
-                                          scheduler.get_lr()[0] * config.batch))
+                                          loss_cls.item(), loss_l2.item()
+                                          ))
 
                 pbar.update(images.shape[0])
 
-            if cfg.use_darknet_cfg:
-                eval_model = Darknet(cfg.cfgfile, inference=True)
-            else:
-                eval_model = Yolov4(cfg.pretrained, n_classes=cfg.classes, inference=True)
-            # eval_model = Yolov4(yolov4conv137weight=None, n_classes=config.classes, inference=True)
-            if torch.cuda.device_count() > 1:
-                eval_model.load_state_dict(model.module.state_dict())
-            else:
-                eval_model.load_state_dict(model.state_dict())
-            eval_model.to(device)
-            evaluator = evaluate(eval_model, val_loader, config, device)
-            del eval_model
+            # if cfg.use_darknet_cfg:
+            #     eval_model = Darknet(cfg.cfgfile, inference=True)
+            # else:
+            #     eval_model = Yolov4(cfg.pretrained, n_classes=cfg.classes, inference=True)
+            # # eval_model = Yolov4(yolov4conv137weight=None, n_classes=config.classes, inference=True)
+            # if torch.cuda.device_count() > 1:
+            #     eval_model.load_state_dict(model.module.state_dict())
+            # else:
+            #     eval_model.load_state_dict(model.state_dict())
+            # eval_model.to(device)
+            # evaluator = evaluate(eval_model, val_loader, config, device)
+            # del eval_model
 
-            stats = evaluator.coco_eval['bbox'].stats
+            # stats = evaluator.coco_eval['bbox'].stats
             writer.add_scalar('train/AP', stats[0], global_step)
             writer.add_scalar('train/AP50', stats[1], global_step)
             writer.add_scalar('train/AP75', stats[2], global_step)
