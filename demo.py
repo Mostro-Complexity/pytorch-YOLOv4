@@ -43,7 +43,7 @@ def detect_cv2(args):
         sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
 
         start = time.time()
-        boxes = do_detect(eval_model, sized, 0.02, 0.6, args.device)
+        boxes = do_detect(eval_model, sized, 0.2, 0.2, args.device)
         finish = time.time()
         print('%s: Predicted in %f seconds.' % (imgfile, (finish - start)))
 

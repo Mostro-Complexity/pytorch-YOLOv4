@@ -11,12 +11,10 @@ z_demo_*
 
 __pycache__
 .idea
-.vscode
 runs
 log
 
 *.jpg
-*.json
 data/outcome
 
 data

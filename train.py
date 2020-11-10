@@ -399,13 +399,13 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
                     writer.add_scalar('train/loss_cls', loss_cls.item(), global_step)
                     writer.add_scalar('train/loss_l2', loss_l2.item(), global_step)
                     # writer.add_scalar('lr', scheduler.get_lr()[0] * config.batch, global_step)
-                    pbar.set_postfix(**{'loss (batch)': loss.item(), 'loss_xy': loss_xy.item(),
-                                        'loss_wh': loss_wh.item(),
-                                        'loss_obj': loss_obj.item(),
-                                        'loss_cls': loss_cls.item(),
-                                        'loss_l2': loss_l2.item()
-                                        # 'lr': scheduler.get_lr()[0] * config.batch
-                                        })
+                    # pbar.set_postfix(**{'loss (batch)': loss.item(), 'loss_xy': loss_xy.item(),
+                    #                     'loss_wh': loss_wh.item(),
+                    #                     'loss_obj': loss_obj.item(),
+                    #                     'loss_cls': loss_cls.item(),
+                    #                     'loss_l2': loss_l2.item()
+                    #                     # 'lr': scheduler.get_lr()[0] * config.batch
+                    #                     })
                     logging.debug('Train step_{}: loss : {},loss xy : {},loss wh : {},'
                                   'loss obj : {}，loss cls : {},loss l2 : {}'
                                   .format(global_step, loss.item(), loss_xy.item(),
@@ -618,6 +618,9 @@ if __name__ == "__main__":
     else:
         model = Yolov4(cfg.pretrained, n_classes=cfg.classes)
 
+    if cfg.load is not None:
+        model.load_state_dict(torch.load(cfg.load, map_location=device))
+    
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     model.to(device=device)
