@@ -12,7 +12,7 @@
             "console": "integratedTerminal",
             "args": [
                 "-weightfile=checkpoints/Yolov4_epoch300.pth",
-                "-imgdir=data/coco/train"
+                "-imgdir=data/labelme/cherry"
             ]
         },
         {
@@ -23,11 +23,11 @@
             "console": "integratedTerminal",
             "args": [
                 "-g=0",
-                "-l=0.0001",
+                "-l=0.001",
                 // "-f=checkpoints/Yolov4_epoch16.pth",
-                "-dir=data/labelme/apple_orange",
+                "-dir=data/labelme/cherry",
                 "-train_label_path=data/general/train.txt",
-                "-classes=2"
+                "-classes=3"
             ]
         },
         {
@@ -61,7 +61,7 @@
             "cwd": "${workspaceRoot}",
             "console": "integratedTerminal",
             "args": [
-                "-i=data/labelme",
+                "-i=data/labelme/cherry",
                 "-o=data/general/train.txt",
                 "-t=yolo"
             ],

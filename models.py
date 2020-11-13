@@ -642,21 +642,24 @@ class Yolov4Head(nn.Module):
         else:
             return [x2, x10, x18]
 
-
 class Yolov4(nn.Module):
-    def __init__(self, backbone, yolov4weight=None, n_classes=80, inference=False):
+    def __init__(self, yolov4conv137weight=None, n_classes=80, inference=False):
         super(Yolov4, self).__init__()
 
         output_ch = (3 + 1 + n_classes) * 3
 
         # backbone
-        self.backbone = backbone
+        self.down1 = DownSample1()
+        self.down2 = DownSample2()
+        self.down3 = DownSample3()
+        self.down4 = DownSample4()
+        self.down5 = DownSample5()
         # neck
         self.neek = Neck(inference)
         # yolov4conv137
-        if yolov4weight:
-            _model = nn.Sequential(*self.backbone.blocks(), self.neek)
-            pretrained_dict = torch.load(yolov4weight)
+        if yolov4conv137weight:
+            _model = nn.Sequential(self.down1, self.down2, self.down3, self.down4, self.down5, self.neek)
+            pretrained_dict = torch.load(yolov4conv137weight)
 
             model_dict = _model.state_dict()
             # 1. filter out unnecessary keys
@@ -668,13 +671,17 @@ class Yolov4(nn.Module):
         # head
         self.head = Yolov4Head(output_ch, n_classes, inference)
 
-    def forward(self, x):
-        d5, d4, d3 = self.backbone(x)
+    def forward(self, input):
+        d1 = self.down1(input)
+        d2 = self.down2(d1)
+        d3 = self.down3(d2)
+        d4 = self.down4(d3)
+        d5 = self.down5(d4)
+
         x20, x13, x6 = self.neek(d5, d4, d3)
 
         output = self.head(x20, x13, x6)
         return output
-
 
 if __name__ == "__main__":
     import sys

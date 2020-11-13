@@ -107,18 +107,18 @@ def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
     area_u = math.pi*(r_a_sqrd + r_b_sqrd) - area_i
     iou = area_i / area_u
 
-    # centerpoint distance squared
-    rho2 = center_dist.square() / 4
-    if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-        # convex diagonal squared
-        c2 = torch.pow(center_dist + r_a + r_b, 2) + 1e-16
-        if DIoU:
-            return iou - rho2 / c2  # DIoU
-        elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-            v = (4 / math.pi ** 2)
-            with torch.no_grad():
-                alpha = v / (1 - iou + v)
-            return iou - (rho2 / c2 + v * alpha)  # CIoU
+    # # centerpoint distance squared
+    # rho2 = center_dist.square() / 4
+    # if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+    #     # convex diagonal squared
+    #     c2 = torch.pow(center_dist + r_a + r_b, 2) + 1e-16
+    #     if DIoU:
+    #         return iou - rho2 / c2  # DIoU
+    #     elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+    #         v = (4 / math.pi ** 2)
+    #         with torch.no_grad():
+    #             alpha = v / (1 - iou + v)
+    #         return iou - (rho2 / c2 + v * alpha)  # CIoU
 
     # if GIoU or DIoU or CIoU:
     #     if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
@@ -231,7 +231,7 @@ class Yolo_loss(nn.Module):
         super(Yolo_loss, self).__init__()
         self.device = device
         self.strides = [8, 16, 32]
-        image_size = 320
+        image_size = 896
         self.n_classes = n_classes
         self.n_anchors = n_anchors
 
@@ -718,7 +718,7 @@ if __name__ == "__main__":
     if cfg.use_darknet_cfg:
         model = Darknet(cfg.cfgfile)
     else:
-        model = Yolov4(DenseNet(efficient=True), yolov4weight=cfg.pretrained, n_classes=cfg.classes)
+        model = Yolov4(yolov4conv137weight=cfg.pretrained, n_classes=cfg.classes)
 
     if cfg.load is not None:
         model.load_state_dict(torch.load(cfg.load, map_location=device))
