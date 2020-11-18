@@ -28,7 +28,6 @@ from torch.utils.data import DataLoader
 from torch import optim
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
-from torch.cuda.amp import autocast, GradScaler
 from easydict import EasyDict as edict
 
 from dataset import Yolo_dataset
@@ -39,329 +38,6 @@ from tool.darknet2pytorch import Darknet
 from tool.tv_reference.utils import collate_fn as val_collate
 from tool.tv_reference.coco_utils import convert_to_coco_api
 from tool.tv_reference.coco_eval import CocoEvaluator
-
-
-def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
-    if bboxes_a.shape[1] != 3 or bboxes_b.shape[1] != 3:
-        raise IndexError
-
-    r_a, r_b = bboxes_a[:, None, 2], bboxes_b[:, 2]
-    center_dist = torch.norm(bboxes_a[:, None, :2] - bboxes_b[:, :2], p=2, dim=-1)  # center distance
-    intersect_dist, outersect_dist = torch.abs(r_a - r_b), torch.abs(r_a + r_b)
-
-    r_a_sqrd, r_b_sqrd, center_dist_sqrd = r_a.square(), r_b.square(), center_dist.square()
-    theta = torch.acos((r_a_sqrd - r_b_sqrd + center_dist_sqrd)/(2*r_a*r_b))  # It doesn't matter whether theta and phi are exchanged
-    phi = torch.acos((r_b_sqrd - r_a_sqrd + center_dist_sqrd)/(2*r_a*r_b))  # a=R,b=r
-    area_i = theta*r_a_sqrd + phi*r_b_sqrd-r_a_sqrd*torch.sin(2*theta)/2-r_b_sqrd*torch.sin(2*phi)/2
-
-    _index_a, _index_b = torch.where(center_dist < intersect_dist)  # In the case of inner circle
-    if _index_a.numel() != 0 and _index_b.numel() != 0:
-        area_i[_index_a, _index_b] = torch.min(r_a[_index_a].squeeze(), r_b[_index_b]).square()*math.pi
-
-    _index_a, _index_b = torch.where(outersect_dist < center_dist)  # In the case of outer circle
-    if _index_a.numel() != 0 and _index_b.numel() != 0:
-        area_i[_index_a, _index_b] = 0
-
-    # # intersection top left
-    # tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
-    # # intersection bottom right
-    # br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-    # # convex (smallest enclosing box) top left and bottom right
-    # con_tl = torch.min(bboxes_a[:, None, :2], bboxes_b[:, :2])
-    # con_br = torch.max(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-    # # centerpoint distance squared
-    # rho2 = ((bboxes_a[:, None, 0] + bboxes_a[:, None, 2]) - (bboxes_b[:, 0] + bboxes_b[:, 2])) ** 2 / 4 + (
-    #     (bboxes_a[:, None, 1] + bboxes_a[:, None, 3]) - (bboxes_b[:, 1] + bboxes_b[:, 3])) ** 2 / 4
-
-    # w1 = bboxes_a[:, 2] - bboxes_a[:, 0]
-    # h1 = bboxes_a[:, 3] - bboxes_a[:, 1]
-    # w2 = bboxes_b[:, 2] - bboxes_b[:, 0]
-    # h2 = bboxes_b[:, 3] - bboxes_b[:, 1]
-
-    # area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
-    # area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
-    # else:
-    #     # intersection top left
-    #     tl = torch.max((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-    #                    (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-    #     # intersection bottom right
-    #     br = torch.min((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-    #                    (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-
-    #     # convex (smallest enclosing box) top left and bottom right
-    #     con_tl = torch.min((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-    #                        (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-    #     con_br = torch.max((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-    #                        (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-    #     # centerpoint distance squared
-    #     rho2 = ((bboxes_a[:, None, :2] - bboxes_b[:, :2]) ** 2 / 4).sum(dim=-1)
-
-    #     w1 = bboxes_a[:, 2]
-    #     h1 = bboxes_a[:, 3]
-    #     w2 = bboxes_b[:, 2]
-    #     h2 = bboxes_b[:, 3]
-
-    #     area_a = torch.prod(bboxes_a[:, 2:], 1)
-    #     area_b = torch.prod(bboxes_b[:, 2:], 1)
-    # en = (tl < br).type(tl.type()).prod(dim=2)
-    # area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-    area_u = math.pi*(r_a_sqrd + r_b_sqrd) - area_i
-    iou = area_i / area_u
-
-    # centerpoint distance squared
-    rho2 = center_dist.square() / 4
-    if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-        # convex diagonal squared
-        c2 = torch.pow(center_dist + r_a + r_b, 2) + 1e-16
-        if DIoU:
-            return iou - rho2 / c2  # DIoU
-        elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-            v = (4 / math.pi ** 2)
-            with torch.no_grad():
-                alpha = v / (1 - iou + v)
-            return iou - (rho2 / c2 + v * alpha)  # CIoU
-
-    # if GIoU or DIoU or CIoU:
-    #     if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
-    #         area_c = torch.prod(con_br - con_tl, 2)  # convex area
-    #         return iou - (area_c - area_u) / area_c  # GIoU
-    #     if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-    #         # convex diagonal squared
-    #         c2 = torch.pow(con_br - con_tl, 2).sum(dim=2) + 1e-16
-    #         if DIoU:
-    #             return iou - rho2 / c2  # DIoU
-    #         elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-    #             v = (4 / math.pi ** 2) * torch.pow(torch.atan(w1 / h1).unsqueeze(1) - torch.atan(w2 / h2), 2)
-    #             with torch.no_grad():
-    #                 alpha = v / (1 - iou + v)
-    #             return iou - (rho2 / c2 + v * alpha)  # CIoU
-    return iou
-
-
-def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False):
-    """Calculate the Intersection of Unions (IoUs) between bounding boxes.
-    IoU is calculated as a ratio of area of the intersection
-    and area of the union.
-
-    Args:
-        bbox_a (array): An array whose shape is :math:`(N, 4)`.
-            :math:`N` is the number of bounding boxes.
-            The dtype should be :obj:`numpy.float32`.
-        bbox_b (array): An array similar to :obj:`bbox_a`,
-            whose shape is :math:`(K, 4)`.
-            The dtype should be :obj:`numpy.float32`.
-    Returns:
-        array:
-        An array whose shape is :math:`(N, K)`. \
-        An element at index :math:`(n, k)` contains IoUs between \
-        :math:`n` th bounding box in :obj:`bbox_a` and :math:`k` th bounding \
-        box in :obj:`bbox_b`.
-
-    from: https://github.com/chainer/chainercv
-    https://github.com/ultralytics/yolov3/blob/eca5b9c1d36e4f73bf2f94e141d864f1c2739e23/utils/utils.py#L262-L282
-    """
-    if bboxes_a.shape[1] != 4 or bboxes_b.shape[1] != 4:
-        raise IndexError
-
-    if xyxy:
-        # intersection top left
-        tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
-        # intersection bottom right
-        br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-        # convex (smallest enclosing box) top left and bottom right
-        con_tl = torch.min(bboxes_a[:, None, :2], bboxes_b[:, :2])
-        con_br = torch.max(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-        # centerpoint distance squared
-        rho2 = ((bboxes_a[:, None, 0] + bboxes_a[:, None, 2]) - (bboxes_b[:, 0] + bboxes_b[:, 2])) ** 2 / 4 + (
-            (bboxes_a[:, None, 1] + bboxes_a[:, None, 3]) - (bboxes_b[:, 1] + bboxes_b[:, 3])) ** 2 / 4
-
-        w1 = bboxes_a[:, 2] - bboxes_a[:, 0]
-        h1 = bboxes_a[:, 3] - bboxes_a[:, 1]
-        w2 = bboxes_b[:, 2] - bboxes_b[:, 0]
-        h2 = bboxes_b[:, 3] - bboxes_b[:, 1]
-
-        area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
-        area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
-    else:
-        # intersection top left
-        tl = torch.max((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-                       (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-        # intersection bottom right
-        br = torch.min((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-                       (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-
-        # convex (smallest enclosing box) top left and bottom right
-        con_tl = torch.min((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-                           (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-        con_br = torch.max((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-                           (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-        # centerpoint distance squared
-        rho2 = ((bboxes_a[:, None, :2] - bboxes_b[:, :2]) ** 2 / 4).sum(dim=-1)
-
-        w1 = bboxes_a[:, 2]
-        h1 = bboxes_a[:, 3]
-        w2 = bboxes_b[:, 2]
-        h2 = bboxes_b[:, 3]
-
-        area_a = torch.prod(bboxes_a[:, 2:], 1)
-        area_b = torch.prod(bboxes_b[:, 2:], 1)
-    en = (tl < br).type(tl.type()).prod(dim=2)
-    area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-    area_u = area_a[:, None] + area_b - area_i
-    iou = area_i / area_u
-
-    if GIoU or DIoU or CIoU:
-        if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
-            area_c = torch.prod(con_br - con_tl, 2)  # convex area
-            return iou - (area_c - area_u) / area_c  # GIoU
-        if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-            # convex diagonal squared
-            c2 = torch.pow(con_br - con_tl, 2).sum(dim=2) + 1e-16
-            if DIoU:
-                return iou - rho2 / c2  # DIoU
-            elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-                v = (4 / math.pi ** 2) * torch.pow(torch.atan(w1 / h1).unsqueeze(1) - torch.atan(w2 / h2), 2)
-                with torch.no_grad():
-                    alpha = v / (1 - iou + v)
-                return iou - (rho2 / c2 + v * alpha)  # CIoU
-    return iou
-
-
-class Yolo_loss(nn.Module):
-    def __init__(self, image_size=(320, 320), n_classes=80, anchors=[12, 19, 28, 36, 76, 146, 200, 263, 312], n_anchors=3, device=None, batch=2):
-        super(Yolo_loss, self).__init__()
-        self.device = device
-        self.strides = [8, 16, 32]
-        self.image_size = torch.tensor(image_size)
-        self.n_classes = n_classes
-        self.n_anchors = n_anchors
-
-        self.anchors = anchors
-        self.anch_masks = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
-        self.ignore_thre = 0.5
-
-        self.masked_anchors, self.ref_anchors, self.grid_x, self.grid_y, self.anchor_r = [], [], [], [], []
-
-        for i in range(3):
-            all_anchors_grid = [r / self.strides[i] for r in self.anchors]
-            masked_anchors = np.array([all_anchors_grid[j] for j in self.anch_masks[i]], dtype=np.float32)
-            ref_anchors = np.zeros((len(all_anchors_grid), 3), dtype=np.float32)
-            ref_anchors[:, 2] = np.array(all_anchors_grid, dtype=np.float32)
-            ref_anchors = torch.from_numpy(ref_anchors)
-            # calculate pred - xyr obj cls
-            fsize = self.image_size // self.strides[i]
-            grid_x = torch.arange(fsize[0], dtype=torch.float).repeat(batch, 3, fsize[1], 1).to(device)
-            grid_y = torch.arange(fsize[1], dtype=torch.float).repeat(batch, 3, fsize[0], 1).permute(0, 1, 3, 2).to(device)
-            anchor_r = torch.from_numpy(masked_anchors).repeat(batch, fsize[1], fsize[0], 1).permute(0, 3, 1, 2).to(device)
-
-            self.masked_anchors.append(masked_anchors)
-            self.ref_anchors.append(ref_anchors)
-            self.grid_x.append(grid_x)
-            self.grid_y.append(grid_y)
-            self.anchor_r.append(anchor_r)
-
-    def build_target(self, pred, labels, batchsize, fsize, n_ch, output_id):
-        # target assignment
-        tgt_mask = torch.zeros(batchsize, self.n_anchors, fsize[1], fsize[0], 3 + self.n_classes).to(device=self.device)
-        obj_mask = torch.ones(batchsize, self.n_anchors, fsize[1], fsize[0]).to(device=self.device)
-        tgt_scale = torch.zeros(batchsize, self.n_anchors, fsize[1], fsize[0]).to(self.device)
-        target = torch.zeros(batchsize, self.n_anchors, fsize[1], fsize[0], n_ch).to(self.device)
-
-        # labels = labels.cpu().data
-        nlabel = (labels.sum(dim=2) > 0).sum(dim=1)  # number of objects
-
-        truth_x_all = labels[:, :, 0] / self.strides[output_id]  # center=(p1+p2)/2 for bbox
-        truth_y_all = labels[:, :, 1] / self.strides[output_id]  # center=center for cbbox
-        truth_r_all = labels[:, :, 2] / self.strides[output_id]  # w,h=(p1-p2)  r=r
-        truth_i_all = truth_x_all.to(torch.int16).cpu().numpy()
-        truth_j_all = truth_y_all.to(torch.int16).cpu().numpy()
-
-        for b in range(batchsize):
-            n = int(nlabel[b])
-            if n == 0:
-                continue
-            truth_box = torch.zeros(n, 3).to(self.device)
-            truth_box[:n, 2] = truth_r_all[b, :n]
-            truth_i = truth_i_all[b, :n]
-            truth_j = truth_j_all[b, :n]
-
-            # calculate iou between truth and reference anchors
-            anchor_ious_all = cbboxes_iou(truth_box.cpu(), self.ref_anchors[output_id], CIoU=True)
-
-            best_n_all = anchor_ious_all.argmax(dim=1)
-            best_n = best_n_all % 3
-            best_n_mask = ((best_n_all == self.anch_masks[output_id][0]) |
-                           (best_n_all == self.anch_masks[output_id][1]) |
-                           (best_n_all == self.anch_masks[output_id][2]))
-
-            if sum(best_n_mask) == 0:
-                continue
-
-            truth_box[:n, 0] = truth_x_all[b, :n]
-            truth_box[:n, 1] = truth_y_all[b, :n]
-
-            pred_ious = cbboxes_iou(pred[b].view(-1, 3), truth_box)
-            pred_best_iou, _ = pred_ious.max(dim=1)
-            pred_best_iou = (pred_best_iou > self.ignore_thre)
-            pred_best_iou = pred_best_iou.view(pred[b].shape[:3])
-            # set mask to zero (ignore) if pred matches truth
-            obj_mask[b] = ~ pred_best_iou
-
-            for ti in range(best_n.shape[0]):
-                if best_n_mask[ti] == 1:
-                    i, j = truth_i[ti], truth_j[ti]
-                    a = best_n[ti]
-                    obj_mask[b, a, j, i] = 1
-                    tgt_mask[b, a, j, i, :] = 1
-                    # Deactivation for truth
-                    target[b, a, j, i, 0] = truth_x_all[b, ti] - truth_x_all[b, ti].to(torch.int16).to(torch.float)
-                    target[b, a, j, i, 1] = truth_y_all[b, ti] - truth_y_all[b, ti].to(torch.int16).to(torch.float)
-                    target[b, a, j, i, 2] = truth_r_all[b, ti] + 1e-16
-                    target[b, a, j, i, 3] = 1
-                    target[b, a, j, i, 4 + labels[b, ti, 3].to(torch.int16).cpu().numpy()] = 1
-                    tgt_scale[b, a, j, i] = torch.sqrt(2 - torch.square(truth_r_all[b, ti]) / fsize[0] / fsize[1])
-        return obj_mask, tgt_mask, tgt_scale, target
-
-    def forward(self, xin, labels=None):
-        loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = 0, 0, 0, 0, 0, 0
-        for output_id, output in enumerate(xin):
-            batchsize = output.shape[0]
-            fsize = self.image_size // self.strides[output_id]  # w,h
-            n_ch = 4 + self.n_classes
-
-            output = output.view(batchsize, self.n_anchors, n_ch, fsize[1], fsize[0])  # h,w
-            output = output.permute(0, 1, 3, 4, 2)  # .contiguous()
-
-            # logistic activation for xyr, obj, cls
-            output[..., np.r_[:2, 3:n_ch]] = torch.sigmoid(output[..., np.r_[:2, 3:n_ch]])
-
-            pred = output[..., :3].clone()
-            pred[..., 0] += self.grid_x[output_id]
-            pred[..., 1] += self.grid_y[output_id]
-            pred[..., 2] = torch.exp(pred[..., 2]) * self.anchor_r[output_id]
-
-            obj_mask, tgt_mask, tgt_scale, target = self.build_target(pred, labels, batchsize, fsize, n_ch, output_id)
-
-            # loss calculation
-            output[..., 3] *= obj_mask
-            output[..., np.r_[:3, 4:n_ch]] *= tgt_mask
-            pred[..., 2] *= tgt_mask[..., 2]
-            pred[..., 2] += 1e-16
-            # output[..., 2] *= tgt_scale
-
-            target[..., 3] *= obj_mask
-            target[..., np.r_[:3, 4:n_ch]] *= tgt_mask
-            # target[..., 2] *= tgt_scale
-
-            loss_xy += F.mse_loss(input=output, target=target, reduction='sum')
-            loss_r += F.mse_loss(input=pred[..., 2].sqrt(), target=target[..., 2].sqrt(), reduction='sum') * 5
-            loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum') / 2
-            loss_cls += F.binary_cross_entropy(input=output[..., 4:], target=target[..., 4:], reduction='sum')
-            loss_l2 += F.mse_loss(input=output, target=target, reduction='sum')
-            assert not loss_r.isnan().any(), 'nan occurs'
-
-        loss = loss_xy + loss_r + loss_obj + loss_cls
-        return loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2
 
 
 def collate(batch):
@@ -442,12 +118,10 @@ def train(model, device, config, anchors, epochs=5, batch_size=1, save_cp=True, 
             weight_decay=config.decay,
         )
     # scheduler = optim.lr_scheduler.LambdaLR(optimizer, burnin_schedule)
-
-    criterion = Yolo_loss(image_size=(config.w, config.h), device=device, batch=config.batch // config.subdivisions, n_classes=config.classes, anchors=anchors)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[350, 400, 450], gamma=0.7)
+    # TODO
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 200, 250], gamma=0.7)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', verbose=True, patience=6, min_lr=1e-7)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, 0.001, 1e-6, 20)
-    scaler = GradScaler()
 
     save_prefix = 'Yolov4_epoch'
     saved_models = deque()
@@ -467,14 +141,10 @@ def train(model, device, config, anchors, epochs=5, batch_size=1, save_cp=True, 
                 images = images.to(device=device, dtype=torch.float32)
                 bboxes = bboxes.to(device=device)
 
-                bboxes_pred = model(images)
+                loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = model(images, bboxes)
 
-                for b in bboxes_pred:
-                    assert not b.isnan().any(), 'nan occurs'
-
-                loss, loss_xy, loss_r, loss_obj, loss_cls, loss_l2 = criterion(bboxes_pred, bboxes)
                 # loss = loss / config.subdivisions
-                scaler.scale(loss).backward()
+                loss.backward()
                 # nn.utils.clip_grad_norm_(model.parameters(), max_norm=40, norm_type=2)
                 epoch_loss += loss.item()
                 pbar.set_description(
@@ -486,8 +156,7 @@ def train(model, device, config, anchors, epochs=5, batch_size=1, save_cp=True, 
                 )
 
                 if global_step % config.subdivisions == 0:
-                    scaler.step(optimizer)
-                    scaler.update()
+                    optimizer.step()
                     # scheduler.step()
                     model.zero_grad()
 
@@ -657,6 +326,7 @@ def get_args(**kwargs):
         '-keep-checkpoint-max', type=int, default=10,
         help='maximum number of checkpoints to keep. If set 0, all checkpoints will be kept',
         dest='keep_checkpoint_max')
+    parser.add_argument('--local_rank')
     args = vars(parser.parse_args())
 
     # for k in args.keys():
@@ -709,7 +379,6 @@ def _get_date_str():
 if __name__ == "__main__":
     logging = init_logger(log_dir='log')
     cfg = get_args(**Cfg)
-    os.environ["CUDA_VISIBLE_DEVICES"] = cfg.gpu
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
     anchors = [12, 19, 28, 36, 76, 146, 200, 263, 312]
@@ -717,21 +386,23 @@ if __name__ == "__main__":
     if cfg.use_darknet_cfg:
         model = Darknet(cfg.cfgfile)
     else:
-        model = Yolov4(DenseNet(efficient=True), yolov4weight=cfg.pretrained, anchors=anchors, n_classes=cfg.classes)
+        model = Yolov4(DenseNet(efficient=True), yolov4weight=cfg.pretrained, anchors=anchors, n_classes=cfg.classes, config=cfg, device=device)
 
     if cfg.load is not None:
         model.load_state_dict(torch.load(cfg.load, map_location=device))
 
-    if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
     model.to(device=device)
+    if torch.cuda.device_count() > 1:
+        logging.info(f'Using multi-gpu')
+        torch.distributed.init_process_group(backend='nccl', init_method='tcp://localhost:23456', rank=0, world_size=1)
+        model = nn.parallel.DistributedDataParallel(model)
 
     try:
         train(model=model,
               config=cfg,
               epochs=cfg.TRAIN_EPOCHS,
               device=device,
-              anchors=anchors )
+              anchors=anchors)
     except KeyboardInterrupt:
         torch.save(model.state_dict(), 'INTERRUPTED.pth')
         logging.info('Saved interrupt')
