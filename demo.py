@@ -19,6 +19,7 @@ from tool.torch_utils import *
 from tool.darknet2pytorch import Darknet
 import argparse
 from models import Yolov4, CSPDarkNet53, DenseNet
+from config import default_config
 import glob
 
 """hyper parameters"""
@@ -34,7 +35,7 @@ def detect_cv2(args):
     classname = load_class_names(args.classes)
 
     anchors = [12, 19, 28, 36, 76, 146, 200, 263, 312]
-    eval_model = Yolov4(DenseNet(efficient=False), n_classes=len(classname), anchors=anchors, inference=True)
+    eval_model = Yolov4(DenseNet(efficient=False), config=default_config(), inference=True, device=args.device)
     eval_model.load_state_dict(torch.load(args.weightfile, map_location=args.device))
     eval_model.to(args.device)
     print('Loading weights from %s... Done!' % (args.weightfile))
@@ -42,12 +43,12 @@ def detect_cv2(args):
     imgfiles = glob.glob(os.path.join(args.imgdir, '*.jpg'))
     for imgfile in imgfiles:
         img = cv2.imread(imgfile)
-        sized = ScaleInvariantResize((512, 800))(img)
+        sized = ScaleInvariantResize((800, 1280))(img)
         # sized = cv2.resize(img, (320, 320))
         sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
 
         start = time.time()
-        boxes = do_detect(eval_model, sized, 0.01, 0.2, args.device)
+        boxes = do_detect(eval_model, sized, 0.001, 0.2, args.device)
         finish = time.time()
         print('%s: Predicted in %f seconds.' % (imgfile, (finish - start)))
 

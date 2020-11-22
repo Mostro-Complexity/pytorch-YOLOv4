@@ -11,7 +11,7 @@
             "program": "${workspaceRoot}/demo.py",
             "console": "integratedTerminal",
             "args": [
-                "-weightfile=checkpoints/Yolov4_epoch500.pth",
+                "-weightfile=checkpoints/Yolov4_epoch136.pth",
                 "-imgdir=data/labelme/cherry"
             ]
         },
@@ -23,8 +23,8 @@
             "console": "integratedTerminal",
             "args": [
                 "-g=0",
-                "-l=0.0005",
-                // "-f=checkpoints/Yolov4_epoch500.pth",
+                "-l=0.005",
+                // "-f=checkpoints/Yolov4_epoch49.pth",
                 "-dir=data/labelme/cherry",
                 "-train_label_path=data/general/train.txt",
                 "-classes=3"

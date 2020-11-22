@@ -769,7 +769,7 @@ class Yolo_loss(nn.Module):
             target[..., np.r_[:3, 4:n_ch]] *= tgt_mask
             # target[..., 2] *= tgt_scale
 
-            loss_xy += F.mse_loss(input=output, target=target, reduction='sum')
+            loss_xy += F.mse_loss(input=output[..., :2], target=target[..., :2], reduction='sum')
             loss_r += F.mse_loss(input=pred[..., 2].sqrt(), target=target[..., 2].sqrt(), reduction='sum') * 5
             loss_obj += F.binary_cross_entropy(input=output[..., 3], target=target[..., 3], reduction='sum') / 2
             loss_cls += F.binary_cross_entropy(input=output[..., 4:], target=target[..., 4:], reduction='sum')
@@ -784,19 +784,19 @@ class Yolo_loss(nn.Module):
 
 
 class Yolov4(nn.Module):
-    def __init__(self, backbone, anchors, yolov4weight=None, n_classes=80, inference=False, config=None, device=None):
+    def __init__(self, backbone, config, inference=False, device=None):
         super(Yolov4, self).__init__()
 
-        output_ch = (3 + 1 + n_classes) * 3
+        output_ch = (3 + 1 + config.classes) * 3
 
         # backbone
         self.backbone = backbone
         # neck
         self.neek = Neck(inference)
         # yolov4conv137
-        if yolov4weight:
+        if config.pretrained is not None:
             _model = nn.Sequential(*self.backbone.blocks(), self.neek)
-            pretrained_dict = torch.load(yolov4weight)
+            pretrained_dict = torch.load(config.pretrained)
 
             model_dict = _model.state_dict()
             # 1. filter out unnecessary keys
@@ -806,9 +806,8 @@ class Yolov4(nn.Module):
             _model.load_state_dict(model_dict)
 
         # head
-        self.head = Yolov4Head(output_ch, n_classes, anchors, inference)
-        if config is not None:
-            self.criterion = Yolo_loss(image_size=(config.w, config.h), device=device, batch=config.batch // config.subdivisions, n_classes=config.classes, anchors=anchors)
+        self.head = Yolov4Head(output_ch, config.classes, config.anchors, inference)
+        self.criterion = Yolo_loss(image_size=(config.w, config.h), device=device, batch=config.batch // config.subdivisions, n_classes=config.classes, anchors=config.anchors)
 
     def forward(self, x, target=None):
         d5, d4, d3 = self.backbone(x)
@@ -824,65 +823,6 @@ class Yolov4(nn.Module):
         self.device, _, _, _ = torch._C._nn._parse_to(*args, **kwargs)
         return super(Yolov4, self).to(*args, **kwargs)
 
-
-if __name__ == "__main__":
-    import sys
-    import cv2
-
-    namesfile = None
-    if len(sys.argv) == 6:
-        n_classes = int(sys.argv[1])
-        weightfile = sys.argv[2]
-        imgfile = sys.argv[3]
-        height = int(sys.argv[4])
-        width = int(sys.argv[5])
-    elif len(sys.argv) == 7:
-        n_classes = int(sys.argv[1])
-        weightfile = sys.argv[2]
-        imgfile = sys.argv[3]
-        height = sys.argv[4]
-        width = int(sys.argv[5])
-        namesfile = int(sys.argv[6])
-    else:
-        print('Usage: ')
-        print('  python models.py num_classes weightfile imgfile namefile')
-
-    model = Yolov4(yolov4weight=None, n_classes=n_classes, inference=True)
-
-    pretrained_dict = torch.load(weightfile, map_location=torch.device('cuda'))
-    model.load_state_dict(pretrained_dict)
-
-    use_cuda = True
-    if use_cuda:
-        model.cuda()
-
-    img = cv2.imread(imgfile)
-
-    # Inference input size is 416*416 does not mean training size is the same
-    # Training size could be 608*608 or even other sizes
-    # Optional inference sizes:
-    #   Hight in {320, 416, 512, 608, ... 320 + 96 * n}
-    #   Width in {320, 416, 512, 608, ... 320 + 96 * m}
-    sized = cv2.resize(img, (width, height))
-    sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
-
-    from tool.utils import load_class_names, plot_boxes_cv2
-    from tool.torch_utils import do_detect
-
-    for i in range(2):  # This 'for' loop is for speed check
-        # Because the first iteration is usually longer
-        boxes = do_detect(model, sized, 0.4, 0.6, use_cuda)
-
-    if namesfile == None:
-        if n_classes == 20:
-            namesfile = 'data/voc.names'
-        elif n_classes == 80:
-            namesfile = 'data/coco.names'
-        else:
-            print("please give namefile")
-
-    class_names = load_class_names(namesfile)
-    plot_boxes_cv2(img, boxes[0], 'predictions.jpg', class_names)
 
 def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
     if bboxes_a.shape[1] != 3 or bboxes_b.shape[1] != 3:
@@ -905,79 +845,22 @@ def cbboxes_iou(bboxes_a, bboxes_b, GIoU=False, DIoU=False, CIoU=False):
     if _index_a.numel() != 0 and _index_b.numel() != 0:
         area_i[_index_a, _index_b] = 0
 
-    # # intersection top left
-    # tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
-    # # intersection bottom right
-    # br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-    # # convex (smallest enclosing box) top left and bottom right
-    # con_tl = torch.min(bboxes_a[:, None, :2], bboxes_b[:, :2])
-    # con_br = torch.max(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-    # # centerpoint distance squared
-    # rho2 = ((bboxes_a[:, None, 0] + bboxes_a[:, None, 2]) - (bboxes_b[:, 0] + bboxes_b[:, 2])) ** 2 / 4 + (
-    #     (bboxes_a[:, None, 1] + bboxes_a[:, None, 3]) - (bboxes_b[:, 1] + bboxes_b[:, 3])) ** 2 / 4
-
-    # w1 = bboxes_a[:, 2] - bboxes_a[:, 0]
-    # h1 = bboxes_a[:, 3] - bboxes_a[:, 1]
-    # w2 = bboxes_b[:, 2] - bboxes_b[:, 0]
-    # h2 = bboxes_b[:, 3] - bboxes_b[:, 1]
-
-    # area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
-    # area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
-    # else:
-    #     # intersection top left
-    #     tl = torch.max((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-    #                    (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-    #     # intersection bottom right
-    #     br = torch.min((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-    #                    (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-
-    #     # convex (smallest enclosing box) top left and bottom right
-    #     con_tl = torch.min((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-    #                        (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-    #     con_br = torch.max((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-    #                        (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-    #     # centerpoint distance squared
-    #     rho2 = ((bboxes_a[:, None, :2] - bboxes_b[:, :2]) ** 2 / 4).sum(dim=-1)
-
-    #     w1 = bboxes_a[:, 2]
-    #     h1 = bboxes_a[:, 3]
-    #     w2 = bboxes_b[:, 2]
-    #     h2 = bboxes_b[:, 3]
-
-    #     area_a = torch.prod(bboxes_a[:, 2:], 1)
-    #     area_b = torch.prod(bboxes_b[:, 2:], 1)
-    # en = (tl < br).type(tl.type()).prod(dim=2)
-    # area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
     area_u = math.pi*(r_a_sqrd + r_b_sqrd) - area_i
     iou = area_i / area_u
 
-    # centerpoint distance squared
-    rho2 = center_dist.square() / 4
-    if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-        # convex diagonal squared
-        c2 = torch.pow(center_dist + r_a + r_b, 2) + 1e-16
-        if DIoU:
-            return iou - rho2 / c2  # DIoU
-        elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-            v = (4 / math.pi ** 2)
-            with torch.no_grad():
-                alpha = v / (1 - iou + v)
-            return iou - (rho2 / c2 + v * alpha)  # CIoU
+    # # centerpoint distance squared
+    # rho2 = center_dist.square() / 4
+    # if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+    #     # convex diagonal squared
+    #     c2 = torch.pow(center_dist + r_a + r_b, 2) + 1e-16
+    #     if DIoU:
+    #         return iou - rho2 / c2  # DIoU
+    #     elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+    #         v = (4 / math.pi ** 2)
+    #         with torch.no_grad():
+    #             alpha = v / (1 - iou + v)
+    #         return iou - (rho2 / c2 + v * alpha)  # CIoU
 
-    # if GIoU or DIoU or CIoU:
-    #     if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
-    #         area_c = torch.prod(con_br - con_tl, 2)  # convex area
-    #         return iou - (area_c - area_u) / area_c  # GIoU
-    #     if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
-    #         # convex diagonal squared
-    #         c2 = torch.pow(con_br - con_tl, 2).sum(dim=2) + 1e-16
-    #         if DIoU:
-    #             return iou - rho2 / c2  # DIoU
-    #         elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-    #             v = (4 / math.pi ** 2) * torch.pow(torch.atan(w1 / h1).unsqueeze(1) - torch.atan(w2 / h2), 2)
-    #             with torch.no_grad():
-    #                 alpha = v / (1 - iou + v)
-    #             return iou - (rho2 / c2 + v * alpha)  # CIoU
     return iou
 
 
@@ -1068,3 +951,63 @@ def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False
                     alpha = v / (1 - iou + v)
                 return iou - (rho2 / c2 + v * alpha)  # CIoU
     return iou
+
+
+if __name__ == "__main__":
+    import sys
+    import cv2
+
+    namesfile = None
+    if len(sys.argv) == 6:
+        n_classes = int(sys.argv[1])
+        weightfile = sys.argv[2]
+        imgfile = sys.argv[3]
+        height = int(sys.argv[4])
+        width = int(sys.argv[5])
+    elif len(sys.argv) == 7:
+        n_classes = int(sys.argv[1])
+        weightfile = sys.argv[2]
+        imgfile = sys.argv[3]
+        height = sys.argv[4]
+        width = int(sys.argv[5])
+        namesfile = int(sys.argv[6])
+    else:
+        print('Usage: ')
+        print('  python models.py num_classes weightfile imgfile namefile')
+
+    model = Yolov4(pretrained=None, n_classes=n_classes, inference=True)
+
+    pretrained_dict = torch.load(weightfile, map_location=torch.device('cuda'))
+    model.load_state_dict(pretrained_dict)
+
+    use_cuda = True
+    if use_cuda:
+        model.cuda()
+
+    img = cv2.imread(imgfile)
+
+    # Inference input size is 416*416 does not mean training size is the same
+    # Training size could be 608*608 or even other sizes
+    # Optional inference sizes:
+    #   Hight in {320, 416, 512, 608, ... 320 + 96 * n}
+    #   Width in {320, 416, 512, 608, ... 320 + 96 * m}
+    sized = cv2.resize(img, (width, height))
+    sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
+
+    from tool.utils import load_class_names, plot_boxes_cv2
+    from tool.torch_utils import do_detect
+
+    for i in range(2):  # This 'for' loop is for speed check
+        # Because the first iteration is usually longer
+        boxes = do_detect(model, sized, 0.4, 0.6, use_cuda)
+
+    if namesfile == None:
+        if n_classes == 20:
+            namesfile = 'data/voc.names'
+        elif n_classes == 80:
+            namesfile = 'data/coco.names'
+        else:
+            print("please give namefile")
+
+    class_names = load_class_names(namesfile)
+    plot_boxes_cv2(img, boxes[0], 'predictions.jpg', class_names)
