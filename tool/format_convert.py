@@ -1,7 +1,7 @@
 # import package
-import labelme2coco
 import labelme2yolo
 import argparse
+import os
 
 
 def main():
@@ -15,7 +15,8 @@ def main():
         # convert labelme annotations to coco
         labelme2coco.convert(args.input_dir, args.output_path)
     elif args.desired_type == 'yolo':
-        labelme2yolo.convert(args.input_dir, args.output_path)
+        yolo = labelme2yolo.convert(args.input_dir, args.output_path)
+        labelme2yolo.save_classes(yolo, os.path.join(os.path.dirname(args.output_path), 'classes.txt'))
     else:
         raise NotImplementedError()
 

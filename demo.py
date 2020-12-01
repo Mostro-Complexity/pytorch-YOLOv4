@@ -18,6 +18,8 @@ from tool.utils import *
 from tool.torch_utils import *
 from models import Yolov4
 import argparse
+from models import Yolov4, CSPDarkNet53, DenseNet
+from config import default_config
 import glob
 
 """hyper parameters"""
@@ -31,19 +33,20 @@ def detect_cv2(args):
         args.device = torch.device('cpu')
     classname = load_class_names(args.classes)
 
-    eval_model = Yolov4(n_classes=len(classname), inference=True)
+    eval_model = Yolov4(DenseNet(efficient=False), config=default_config(), inference=True, device=args.device)
     eval_model.load_state_dict(torch.load(args.weightfile, map_location=args.device))
     eval_model.to(args.device)
     print('Loading weights from %s... Done!' % (args.weightfile))
 
     imgfiles = glob.glob(os.path.join(args.imgdir, '*.jpg'))
+    imgfiles.extend(glob.glob(os.path.join(args.imgdir, '*.jpeg')))
     for imgfile in imgfiles:
         img = cv2.imread(imgfile)
-        sized = cv2.resize(img, (416, 416))
+        sized = cv2.resize(img, (1280, 800))
         sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
 
         start = time.time()
-        boxes = do_detect(eval_model, sized, 0.2, 0.2, args.device)
+        boxes = do_detect(eval_model, sized, 0.1, 0.2, args.device)
         finish = time.time()
         print('%s: Predicted in %f seconds.' % (imgfile, (finish - start)))
 
@@ -83,7 +86,7 @@ def detect_cv2_camera(cfgfile, weightfile):
         sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
 
         start = time.time()
-        boxes = do_detect(m, sized, 0.4, 0.6, use_cuda)
+        boxes = do_detect(m, sized, 0.001, 0.6, use_cuda)
         finish = time.time()
         print('Predicted in %f seconds.' % (finish - start))
 

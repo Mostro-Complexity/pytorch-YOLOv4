@@ -61,6 +61,27 @@ class CocoEvaluator(object):
             print("IoU metric: {}".format(iou_type))
             coco_eval.summarize()
 
+    def show_pr_curves(self):
+        import matplotlib.pyplot as plt
+        import numpy as np
+        for _, coco_eval in self.coco_eval.items():
+            pr_array1 = coco_eval.eval['precision'][0, :, 0, 0, 2]
+            pr_array2 = coco_eval.eval['precision'][2, :, 0, 0, 2]
+            pr_array3 = coco_eval.eval['precision'][4, :, 0, 0, 2]
+            x = np.arange(0, 1.01, 0.01)
+            plt.xlabel('recall')
+            plt.ylabel('precision')
+            plt.xlim(0, 1.0)
+            plt.ylim(0, 1.01)
+            plt.grid()
+
+            plt.plot(x, pr_array1, 'b-', label='IoU=0.5')
+            plt.plot(x, pr_array2, 'c-', label='IoU=0.6')
+            plt.plot(x, pr_array3, 'y-', label='IoU=0.7')
+
+            plt.legend(loc='lower left')
+            plt.show()
+
     def prepare(self, predictions, iou_type):
         if iou_type == "bbox":
             return self.prepare_for_coco_detection(predictions)
@@ -76,7 +97,7 @@ class CocoEvaluator(object):
         for original_id, prediction in predictions.items():
             if len(prediction) == 0:
                 continue
-            
+
             if self.bbox_fmt == 'coco':
                 boxes = prediction["boxes"].tolist()
             else:

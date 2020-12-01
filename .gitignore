@@ -18,3 +18,6 @@ log
 data/outcome
 
 data
+
+.vscode/settings.json
+*.zip

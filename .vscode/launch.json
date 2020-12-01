@@ -23,7 +23,21 @@
             "console": "integratedTerminal",
             "args": [
                 "-g=0",
-                "-l=0.0001",
+                "-l=0.0261",
+                // "-f=checkpoints/Yolov4_epoch109.pth",
+                "-dir=data/labelme/square_cherry",
+                "-train_label_path=data/general/train.txt",
+                "-classes=3"
+            ]
+        },
+        {
+            "name": "eval (cherry)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceRoot}/eval.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-g=0",
                 "-f=checkpoints/Yolov4_epoch300.pth",
                 "-dir=data/labelme/square_cherry",
                 "-train_label_path=data/general/train.txt",
