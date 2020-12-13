@@ -55,7 +55,7 @@ def default_config():
     Cfg.workers = 0
 
     Cfg.cutmix = 0
-    Cfg.mosaic = 1
+    Cfg.mosaic = 0
 
     Cfg.letter_box = 0
     Cfg.jitter = 0.15

@@ -11,7 +11,7 @@
             "program": "${workspaceRoot}/demo.py",
             "console": "integratedTerminal",
             "args": [
-                "-weightfile=checkpoints/Yolov4_epoch300.pth",
+                "-weightfile=checkpoints/squared_cherry/Yolov4_epoch214.pth",
                 "-imgdir=data/labelme/square_cherry"
             ]
         },
@@ -38,7 +38,7 @@
             "console": "integratedTerminal",
             "args": [
                 "-g=0",
-                "-f=checkpoints/Yolov4_epoch300.pth",
+                "-f=checkpoints/squared_cherry/Yolov4_epoch214.pth",
                 "-dir=data/labelme/square_cherry",
                 "-train_label_path=data/general/train.txt",
                 "-classes=3"

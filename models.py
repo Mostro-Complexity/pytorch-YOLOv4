@@ -742,8 +742,10 @@ class Yolo_loss(nn.Module):
                     tgt_mask[b, a, j, i, :] = 1
                     target[b, a, j, i, 0] = truth_x_all[b, ti] - truth_x_all[b, ti].to(torch.int16).to(torch.float)
                     target[b, a, j, i, 1] = truth_y_all[b, ti] - truth_y_all[b, ti].to(torch.int16).to(torch.float)
-                    target[b, a, j, i, 2] = truth_w_all[b, ti]
-                    target[b, a, j, i, 3] = truth_h_all[b, ti]
+                    target[b, a, j, i, 2] = torch.log(
+                        truth_w_all[b, ti] / torch.tensor(self.masked_anchors[output_id])[best_n[ti], 0] + 1e-16)
+                    target[b, a, j, i, 3] = torch.log(
+                        truth_h_all[b, ti] / torch.tensor(self.masked_anchors[output_id])[best_n[ti], 1] + 1e-16)
                     target[b, a, j, i, 4] = 1
                     target[b, a, j, i, 5 + labels[b, ti, 4].to(torch.int16).cpu().numpy()] = 1
                     tgt_scale[b, a, j, i, :] = torch.sqrt(2 - truth_w_all[b, ti] * truth_h_all[b, ti] / fsize[0] / fsize[1])
@@ -780,7 +782,7 @@ class Yolo_loss(nn.Module):
             target[..., 2:4] *= tgt_scale
 
             loss_xy += F.binary_cross_entropy(input=output[..., :2], target=target[..., :2], weight=tgt_scale * tgt_scale, reduction='sum')
-            loss_wh += F.mse_loss(input=pred[..., 2:4], target=target[..., 2:4], reduction='sum') / 2
+            loss_wh += F.mse_loss(input=output[..., 2:4], target=target[..., 2:4], reduction='sum') / 2
             loss_obj += F.binary_cross_entropy(input=output[..., 4], target=target[..., 4], reduction='sum')
             loss_cls += F.binary_cross_entropy(input=output[..., 5:], target=target[..., 5:], reduction='sum')
             loss_l2 += F.mse_loss(input=output, target=target, reduction='sum')
