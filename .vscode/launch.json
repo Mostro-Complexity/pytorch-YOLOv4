@@ -11,8 +11,8 @@
             "program": "${workspaceRoot}/demo.py",
             "console": "integratedTerminal",
             "args": [
-                "-weightfile=checkpoints/Yolov4_epoch300.pth",
-                "-imgdir=data/coco/train"
+                "-weightfile=checkpoints/apple_orange/Yolov4_epoch300.pth",
+                "-imgdir=data/labelme/apple_orange"
             ]
         },
         {
@@ -23,35 +23,12 @@
             "console": "integratedTerminal",
             "args": [
                 "-g=0",
-                "-l=0.0001",
+                "-l=0.005",
                 // "-f=checkpoints/Yolov4_epoch16.pth",
                 "-dir=data/labelme/apple_orange",
                 "-train_label_path=data/general/train.txt",
                 "-classes=2"
             ]
-        },
-        {
-            "name": "dataset format convert (coco2general)",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceRoot}/tool/coco_annotation.py",
-            "console": "integratedTerminal"
-        },
-        {
-            "name": "dataset format convert (labelme2coco)",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceRoot}/tool/format_convert.py",
-            "cwd": "${workspaceRoot}",
-            "console": "integratedTerminal",
-            "args": [
-                "-i=data/labelme",
-                "-o=data/coco/annotations/trainval.json",
-                "-t=coco"
-            ],
-            "env": {
-                "PYTHONPATH": "${workspaceRoot}"
-            }
         },
         {
             "name": "dataset format convert (labelme2yolo)",
@@ -61,7 +38,7 @@
             "cwd": "${workspaceRoot}",
             "console": "integratedTerminal",
             "args": [
-                "-i=data/labelme",
+                "-i=data/labelme/apple_orange",
                 "-o=data/general/train.txt",
                 "-t=yolo"
             ],
